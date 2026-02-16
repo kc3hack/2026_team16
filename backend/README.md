@@ -54,7 +54,7 @@ Windows (PowerShell) の場合:
 必要なライブラリを一括でインストールします。(必ず仮想環境が有効になっている状態で行ってください)
 
 ```Bash
-pip install -r requirements.txt
+pip install -r ../requirements.txt
 ```
 ▶️ サーバーの起動方法
 ローカル開発（自分だけがアクセスする場合）
