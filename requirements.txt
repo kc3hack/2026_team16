@@ -4,3 +4,5 @@ sqlalchemy
 apscheduler
 pydantic
 requests
+discord.py
+python-dotenv
