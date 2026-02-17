@@ -2,8 +2,15 @@ from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
+from gpiozero import Button
+from datetime import datetime
+import os
+
+# 自作モジュール
 import models, schemas, crud, tasks
 from database import SessionLocal, engine
+# 攻撃実行用モジュールをインポート
+import android_mdm
 
 # DBテーブル作成
 models.Base.metadata.create_all(bind=engine)
@@ -14,12 +21,49 @@ scheduler = BackgroundScheduler()
 # 【設定】毎日 00:00 に tasks.update_daily_offsets を実行
 scheduler.add_job(tasks.update_daily_offsets, 'cron', hour=0, minute=0)
 
+# --- GPIO設定 ---
+BUTTON_PIN = 17
+button = None
+
+def on_press():
+    # 1. 送信時刻を取得
+    push_time = datetime.now()
+    print(f"\n🔴 [Button] Pressed at {push_time}")
+
+    # 2. DBセッションを開いて設定値を読む
+    db = SessionLocal()
+    try:
+        # DBから「何分ずらすか」を取得
+        offset_minutes = crud.get_attack_config(db)
+        print(f"📖 [DB] Attack Config Loaded: {offset_minutes} minutes")
+
+        # 3. 時刻と設定値の「2値」を渡して攻撃実行
+        android_mdm.execute_attack(offset_minutes=offset_minutes, timestamp=push_time)
+        
+    except Exception as e:
+        print(f"⚠️ Attack Failed: {e}")
+    finally:
+        db.close()
+
+def on_release():
+    print("\n🟢 [Button] Released. Stopping attack...")
+    android_mdm.stop_attack()
+
 # --- ライフスパンイベント（起動時と終了時の処理） ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 起動時
     print("Starting Scheduler...")
     scheduler.start()
+    # GPIO初期化
+    global button
+    try:
+        button = Button(BUTTON_PIN, pull_up=True, bounce_time=0.1)
+        button.when_pressed = on_press
+        button.when_released = on_release
+        print(f"✅ GPIO {BUTTON_PIN} is ready.")
+    except Exception as e:
+        print(f"⚠️ GPIO Init Error: {e}")
     yield
     # 終了時
     print("Stopping Scheduler...")

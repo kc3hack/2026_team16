@@ -50,3 +50,11 @@ class Schedule(Base):
     is_processed = Column(Boolean, default=False) # 既にこの予定に合わせて時間をずらしたか
 
     owner = relationship("User", back_populates="schedules")
+
+class SystemConfig(Base):
+    __tablename__ = "system_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # ボタンを押した時にずらすデフォルトの時間（分）
+    default_attack_offset_minutes = Column(Integer, default=60) 
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
