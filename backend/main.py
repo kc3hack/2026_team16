@@ -79,7 +79,6 @@ async def update_daily_offsets_and_push():
     finally:
         db.close()
 
-
 # --- スケジューラーの設定 ---
 scheduler = AsyncIOScheduler()
 scheduler.add_job(update_daily_offsets_and_push, 'cron', hour=0, minute=0)
@@ -89,12 +88,6 @@ scheduler.add_job(update_daily_offsets_and_push, 'cron', hour=0, minute=0)
 async def lifespan(app: FastAPI):
     print("Starting Scheduler...")
     scheduler.start()
-    
-    print("----- REGISTERED ROUTES -----")
-    for route in app.routes:
-        print(f"Path: {route.path} | Name: {route.name}")
-    print("-----------------------------")
-    
     yield
     print("Stopping Scheduler...")
     scheduler.shutdown()
