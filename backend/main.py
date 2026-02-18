@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -14,7 +14,7 @@ from mdm_client import MDMClient  # 🆕 MDMクライアントをインポート
 # 環境変数の読み込み (プロファイルID取得用)
 load_dotenv()
 PROFILE_TOKYO = os.getenv("MDM_PROFILE_TOKYO")
-PROFILE_WARP = os.getenv("MDM_PROFILE_HONGKONG")  # 時空を歪ませる用（+8:00など）
+PROFILE_WARP = os.getenv("MDM_PROFILE_GMT10")  # 時空を歪ませる用（+8:00など）
 
 # DBテーブル作成
 models.Base.metadata.create_all(bind=engine)
@@ -169,7 +169,7 @@ def read_user_offset(user_id: int, db: Session = Depends(get_db)):
 
 # 4. 手動で時間をずらす (テスト用 & 即時反映)
 @app.put("/offset/{user_id}")
-async def update_time(user_id: int, time_data: schemas.TimeUpdate, db: Session = Depends(get_db)):
+async def update_time(user_id: int, time_data: schemas.TimeUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     # DB更新
     updated_user = crud.update_offset(db, user_id=user_id, offset_minutes=time_data.offset_minutes)
     if updated_user is None:
@@ -187,7 +187,7 @@ async def update_time(user_id: int, time_data: schemas.TimeUpdate, db: Session =
     target_profile = PROFILE_WARP if time_data.offset_minutes > 0 else PROFILE_TOKYO
     if target_profile:
         print(f"📱 MDM Manual Update: Applying Profile {target_profile}")
-        mdm_client.change_timezone(target_profile)
+        background_tasks.add_task(mdm_client.change_timezone, target_profile)
     
     return {"message": f"User {user_id}'s time has been shifted by {time_data.offset_minutes} minutes."}
 
