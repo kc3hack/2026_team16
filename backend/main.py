@@ -1,40 +1,42 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
-from apscheduler.schedulers.background import BackgroundScheduler
 from gpiozero import Button
 from datetime import datetime
 import time
-import threading  # ★ 追加：別スレッドで裏作業をさせるため
+import threading
+import asyncio
 
 # 自作モジュール
 import models, schemas, crud
 from database import SessionLocal, engine
-import android_mdm
 
 # DBテーブル作成
 models.Base.metadata.create_all(bind=engine)
 
-# --- スケジューラーの設定 ---
-scheduler = BackgroundScheduler()
+# ==========================
+# WebSocket接続マネージャー
+# ==========================
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
 
-def midnight_job():
-    print("🕛 深夜0時: 時間変更の定期処理が発動しました！")
-    db = SessionLocal()
-    try:
-        settings = crud.get_all_settings(db)
-        push_time = datetime.now()
-        
-        if not settings:
-            print("⚠️ DBにターゲットがいません。処理をスキップします。")
-            
-        for user in settings:
-            print(f"🎯 [定期実行] ターゲット: {user.discord_user_id} を {user.offset_minutes}分 ずらします")
-            android_mdm.execute_attack(offset_minutes=user.offset_minutes, timestamp=push_time) # type: ignore
-    except Exception as e:
-        print(f"⚠️ 定期実行エラー: {e}")
-    finally:
-        db.close()
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception as e:
+                print(f"⚠️ WebSocket送信エラー: {e}")
+
+manager = ConnectionManager()
+loop = None
 
 # --- GPIO設定 ---
 BUTTON_PIN = 17
@@ -46,44 +48,45 @@ def on_press():
     press_start_time = time.time()
     print("🔘 [Button] 押されました。時間計測スタート...")
 
-# ★ 新規追加：ボタンが離された「後」に裏で走る重い処理
 def execute_button_action(press_duration):
     if press_duration <= 3.0:
-        print("⚡ 【短押し検知】時間をずらします（攻撃実行）")
+        print("⚡ 【短押し検知】Windowsへ時間をずらす命令を送信します！")
         db = SessionLocal()
         try:
             settings = crud.get_all_settings(db)
-            push_time = datetime.now()
-            
             if not settings:
-                print("⚠️ DBにターゲットがいません。攻撃をスキップします。")
-                
-            for user in settings:
-                print(f"🎯 ターゲット: {user.discord_user_id} を {user.offset_minutes}分 ずらします")
-                android_mdm.execute_attack(offset_minutes=user.offset_minutes, timestamp=push_time) # type: ignore
+                print("⚠️ DBにターゲットがいません。")
+                return
+            
+            offset = settings[0].offset_minutes 
+            print(f"🎯 ターゲット設定値: {offset}分 ずらします")
+            
+            payload = {"action": "shift", "offset_minutes": offset}
+            
+            if loop:
+                asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
         finally:
             db.close()
     else:
-        print("🛡️ 【長押し検知】時間を元に戻します（復旧実行）")
-        android_mdm.stop_attack()
+        print("🛡️ 【長押し検知】Windowsへ時間を元に戻す命令を送信します！")
+        payload = {"action": "restore"}
+        if loop:
+            asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
 
-# ★ 修正：監視員は「押された時間を計算して、裏方に丸投げする」だけ！
 def on_release():
     global press_start_time
     press_duration = time.time() - press_start_time
     print(f"🔘 [Button] 離されました。押下時間: {press_duration:.2f}秒")
-
-    # 別スレッド（裏の作業員）に処理を任せて、ボタン監視自体は一瞬で終わらせる
     threading.Thread(target=execute_button_action, args=(press_duration,)).start()
 
 # --- ライフスパンイベント ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("Starting Scheduler...")
-    scheduler.start()
+    global loop
+    loop = asyncio.get_running_loop()
+    
     global button
     try:
-        # bounce_time を 0.1 から 0.05 に変更し、少しだけ敏感にしました
         button = Button(BUTTON_PIN, pull_up=True, bounce_time=0.05)
         button.when_pressed = on_press
         button.when_released = on_release
@@ -91,8 +94,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️ GPIO Init Error: {e}")
     yield
-    print("Stopping Scheduler...")
-    scheduler.shutdown()
+    # アプリ終了時の処理（今は特になし）
 
 app = FastAPI(lifespan=lifespan)
 
@@ -106,6 +108,19 @@ def get_db():
 # ==========================
 #          API 定義
 # ==========================
+
+@app.websocket("/ws/windows")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    print("💻 [WebSocket] Windows PCが接続しました！")
+    try:
+        while True:
+            # 接続維持のためだけに受信待機（変数は不要）
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        print("🔌 [WebSocket] Windows PCが切断されました")
+
 
 @app.post("/api/settings/")
 def update_setting(setting: schemas.UserSettingCreate, db: Session = Depends(get_db)):
