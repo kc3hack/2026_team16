@@ -5,6 +5,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from gpiozero import Button
 from datetime import datetime
 import os
+import time
 
 # 自作モジュール
 import models, schemas, crud, tasks
@@ -26,28 +27,38 @@ BUTTON_PIN = 17
 button = None
 
 def on_press():
-    # 1. 送信時刻を取得
-    push_time = datetime.now()
-    print(f"\n🔴 [Button] Pressed at {push_time}")
-
-    # 2. DBセッションを開いて設定値を読む
-    db = SessionLocal()
-    try:
-        # DBから「何分ずらすか」を取得
-        offset_minutes = crud.get_attack_config(db)
-        print(f"📖 [DB] Attack Config Loaded: {offset_minutes} minutes")
-
-        # 3. 時刻と設定値の「2値」を渡して攻撃実行
-        android_mdm.execute_attack(offset_minutes=offset_minutes, timestamp=push_time)
-        
-    except Exception as e:
-        print(f"⚠️ Attack Failed: {e}")
-    finally:
-        db.close()
+    global press_start_time
+    # ボタンが押された瞬間の時間を記録
+    press_start_time = time.time()
+    print("🔘 [Button] 押されました。時間計測スタート...")
 
 def on_release():
-    print("\n🟢 [Button] Released. Stopping attack...")
-    android_mdm.stop_attack()
+    global press_start_time
+    # ボタンが離された瞬間の時間から、押された時間を引いて「何秒押していたか」を計算
+    press_duration = time.time() - press_start_time
+    print(f"🔘 [Button] 離されました。押下時間: {press_duration:.2f}秒")
+
+    if press_duration <= 3.0:
+        # ＝＝＝ 短押し（3秒以下）の処理：攻撃実行 ＝＝＝
+        print("⚡ 【短押し検知】時間をずらします（攻撃実行）")
+        
+        db = SessionLocal()
+        try:
+            # DBからずらす時間（offset_minutes）を取得する（※今のコードの通りでOK）
+            offset_minutes = crud.get_attack_config(db) 
+            push_time = datetime.now()
+            
+            # 攻撃コマンド送信
+            android_mdm.execute_attack(offset_minutes=offset_minutes, timestamp=push_time)
+        finally:
+            db.close()
+            
+    else:
+        # ＝＝＝ 長押し（3秒超）の処理：復旧実行 ＝＝＝
+        print("🛡️ 【長押し検知】時間を元に戻します（復旧実行）")
+        
+        # 復旧コマンド送信
+        android_mdm.stop_attack()
 
 # --- ライフスパンイベント（起動時と終了時の処理） ---
 @asynccontextmanager
