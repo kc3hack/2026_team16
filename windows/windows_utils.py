@@ -34,6 +34,7 @@ class DYNAMIC_TIME_ZONE_INFORMATION(ctypes.Structure):
     ]
 
 kernel32 = ctypes.windll.kernel32
+user32 = ctypes.windll.user32  # ★SendMessageTimeoutWを使うために追加
 
 def enable_privilege(privilege_name):
     """Enables the specified privilege for the current process token using pywin32."""
@@ -63,6 +64,8 @@ def set_timezone_offset(offset_minutes, dry_run=False):
     Changes the system timezone bias using SetDynamicTimeZoneInformation (via ctypes).
     Assuming JST standard (-540) as base.
     """
+    enable_privilege("SeTimeZonePrivilege") # ★念のため毎回権限をチェック
+    
     if dry_run:
         logger.info(f"[DRY-RUN] Will shift Timezone by {offset_minutes} minutes.")
         return
@@ -89,10 +92,22 @@ def set_timezone_offset(offset_minutes, dry_run=False):
         success = kernel32.SetDynamicTimeZoneInformation(ctypes.byref(dtzi))
         if success:
              logger.info(f"✅ Timezone changed! Virtual Offset: {offset_minutes} mins.")
-             win32api.SendMessage(win32con.HWND_BROADCAST, win32con.WM_SETTINGCHANGE, 0, "intl")
+             
+             # ★大手術！フリーズの原因だったSendMessageを、1秒で諦めるTimeout版に変更！
+             # 0xFFFF = HWND_BROADCAST, 0x001A = WM_SETTINGCHANGE, 0x0002 = SMTO_ABORTIFHUNG
+             user32.SendMessageTimeoutW(
+                 0xFFFF, 0x001A, 0, ctypes.c_wchar_p("Time"), 0x0002, 1000, None
+             )
         else:
              err = ctypes.GetLastError()
              logger.error(f"❌ Failed to set timezone. Error Code: {err}")
              
     except Exception as e:
         logger.error(f"❌ Exception setting timezone: {e}")
+
+# ★追加：時間を元に戻すための専用関数
+def restore_timezone():
+    """Restores the timezone back to standard JST"""
+    logger.info("🛡️ Restoring timezone to default JST...")
+    # ズレを 0 分に設定する＝元のJST(-540)に戻る
+    set_timezone_offset(0)
