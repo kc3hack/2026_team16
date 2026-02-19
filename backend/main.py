@@ -5,6 +5,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from gpiozero import Button
 from datetime import datetime
 import time
+import threading  # ★ 追加：別スレッドで裏作業をさせるため
 
 # 自作モジュール
 import models, schemas, crud
@@ -29,7 +30,6 @@ def midnight_job():
             
         for user in settings:
             print(f"🎯 [定期実行] ターゲット: {user.discord_user_id} を {user.offset_minutes}分 ずらします")
-            # 攻撃実行！
             android_mdm.execute_attack(offset_minutes=user.offset_minutes, timestamp=push_time) # type: ignore
     except Exception as e:
         print(f"⚠️ 定期実行エラー: {e}")
@@ -46,16 +46,12 @@ def on_press():
     press_start_time = time.time()
     print("🔘 [Button] 押されました。時間計測スタート...")
 
-def on_release():
-    global press_start_time
-    press_duration = time.time() - press_start_time
-    print(f"🔘 [Button] 離されました。押下時間: {press_duration:.2f}秒")
-
+# ★ 新規追加：ボタンが離された「後」に裏で走る重い処理
+def execute_button_action(press_duration):
     if press_duration <= 3.0:
         print("⚡ 【短押し検知】時間をずらします（攻撃実行）")
         db = SessionLocal()
         try:
-            # 新しいDBから「登録されている全員の設定」を取得
             settings = crud.get_all_settings(db)
             push_time = datetime.now()
             
@@ -63,7 +59,6 @@ def on_release():
                 print("⚠️ DBにターゲットがいません。攻撃をスキップします。")
                 
             for user in settings:
-                # ※本当はここで各ユーザーの mdm_device_id を使って攻撃します
                 print(f"🎯 ターゲット: {user.discord_user_id} を {user.offset_minutes}分 ずらします")
                 android_mdm.execute_attack(offset_minutes=user.offset_minutes, timestamp=push_time) # type: ignore
         finally:
@@ -72,6 +67,15 @@ def on_release():
         print("🛡️ 【長押し検知】時間を元に戻します（復旧実行）")
         android_mdm.stop_attack()
 
+# ★ 修正：監視員は「押された時間を計算して、裏方に丸投げする」だけ！
+def on_release():
+    global press_start_time
+    press_duration = time.time() - press_start_time
+    print(f"🔘 [Button] 離されました。押下時間: {press_duration:.2f}秒")
+
+    # 別スレッド（裏の作業員）に処理を任せて、ボタン監視自体は一瞬で終わらせる
+    threading.Thread(target=execute_button_action, args=(press_duration,)).start()
+
 # --- ライフスパンイベント ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -79,7 +83,8 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     global button
     try:
-        button = Button(BUTTON_PIN, pull_up=True, bounce_time=0.1)
+        # bounce_time を 0.1 から 0.05 に変更し、少しだけ敏感にしました
+        button = Button(BUTTON_PIN, pull_up=True, bounce_time=0.05)
         button.when_pressed = on_press
         button.when_released = on_release
         print(f"✅ GPIO {BUTTON_PIN} is ready.")
@@ -102,19 +107,13 @@ def get_db():
 #          API 定義
 # ==========================
 
-# ★新機能：Discord Botからのデータ受け入れ口
 @app.post("/api/settings/")
 def update_setting(setting: schemas.UserSettingCreate, db: Session = Depends(get_db)):
-    """
-    Discord Botから送られてきたユーザー設定をDBに保存（上書き）する
-    """
     updated_setting = crud.upsert_user_setting(
         db=db,
         discord_id=setting.discord_user_id,
         device_id=setting.mdm_device_id,
         offset=setting.offset_minutes
     )
-    
     print(f"📥 [DB保存] DiscordID: {setting.discord_user_id}, 端末: {setting.mdm_device_id}, ズレ: {setting.offset_minutes}分")
-    
     return {"status": "success", "message": "設定を保存しました"}
