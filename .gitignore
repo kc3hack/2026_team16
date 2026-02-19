@@ -5,7 +5,8 @@ __pycache__/
 
 # Virtual Environment
 venv/
-env/
+.venv/
+.env
 
 # Database
 *.db
@@ -13,5 +14,3 @@ env/
 
 # OS specific
 .DS_Store
-
-*/.env
