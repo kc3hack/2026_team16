@@ -1,66 +1,82 @@
+# crud.py
 from sqlalchemy.orm import Session
-from datetime import datetime, date, timedelta
-import models, schemas
+import models
+import random
 
-# --- ユーザー関連 ---
-
-def get_user(db: Session, user_id: int):
-    return db.query(models.User).filter(models.User.id == user_id).first()
-
-# Discord ID からユーザーを検索する関数
-def get_user_by_discord_id(db: Session, discord_user_id: str):
-    return db.query(models.User).filter(models.User.discord_user_id == discord_user_id).first()
-
-def get_users(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.User).offset(skip).limit(limit).all()
-
-# discord_user_id も保存するように変更
-def create_user(db: Session, user: schemas.UserCreate):
-    # UserCreateスキーマからデータを取り出してモデルを作る
-    db_user = models.User(
-        username=user.username, 
-        discord_user_id=user.discord_user_id # ここで保存！
-    )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    return db_user
-
-def update_offset(db: Session, user_id: int, offset_minutes: int):
-    db_user = get_user(db, user_id)
-    if db_user:
-        db_user.current_offset_minutes = offset_minutes
-        db.commit()
-        db.refresh(db_user)
-    return db_user
-
-# --- スケジュール関連 ---
-
-def create_schedule(db: Session, schedule: schemas.ScheduleCreate, user_id: int):
-    # スキーマに合わせてデータをマッピング
-    db_schedule = models.Schedule(
-        title=schedule.title,
-        original_start_time=schedule.original_start_time,
-        source=schedule.source,
-        user_id=user_id
-    )
-    db.add(db_schedule)
-    db.commit()
-    db.refresh(db_schedule)
-    return db_schedule
-
-def get_user_schedules(db: Session, user_id: int, skip: int = 0, limit: int = 100):
-    return db.query(models.Schedule).filter(models.Schedule.user_id == user_id).offset(skip).limit(limit).all()
-
-def has_plan_today(db: Session, user_id: int) -> bool:
-    today = date.today()
-    # 00:00:00 から 23:59:59 までの範囲で検索
-    start_of_day = datetime.combine(today, datetime.min.time())
-    end_of_day = datetime.combine(today, datetime.max.time())
+# ＝＝＝ ① Discord Botが動いた時に「保存」する処理 ＝＝＝
+def upsert_user_setting(db: Session, discord_id: str, device_id: str, offset: int):
+    """
+    ユーザー設定を保存する。
+    既に登録されているユーザーなら上書き更新し、新規なら新しく作成する。
+    """
+    setting = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == discord_id).first()
     
-    # 予定を検索 (original_start_timeを使用)
-    return db.query(models.Schedule).filter(
-        models.Schedule.user_id == user_id,
-        models.Schedule.original_start_time >= start_of_day,
-        models.Schedule.original_start_time <= end_of_day
-    ).first() is not None
+    if setting:
+        # 既にいれば上書き更新
+        setting.mdm_device_id = device_id # type: ignore
+        setting.offset_minutes = offset # type: ignore
+    else:
+        # いなければ新規作成
+        setting = models.UserSetting(
+            discord_user_id=discord_id,
+            mdm_device_id=device_id,
+            offset_minutes=offset
+        )
+        db.add(setting)
+    
+    db.commit()
+    db.refresh(setting)
+    return setting
+
+# ＝＝＝ ② 毎日0時に「取り出す」処理 ＝＝＝
+def get_all_settings(db: Session):
+    """
+    登録されているすべてのユーザー設定をリストで取得する。
+    深夜0時の自動実行時に使用する。
+    """
+    return db.query(models.UserSetting).all()
+
+# ＝＝＝ ③ スマホ(BLE)から初期設定された時の処理 ＝＝＝
+def register_user_from_ble(db: Session, discord_id: str):
+    """
+    BLE通信でDiscord IDが送られてきた時の処理。
+    既存ユーザーなら設定を壊さないように何もしない。新規なら枠だけ作る。
+    """
+    setting = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == discord_id).first()
+    
+    if not setting:
+        # まだデータベースにいない新規ユーザーなら、初期値で作成
+        setting = models.UserSetting(
+            discord_user_id=discord_id,
+            mdm_device_id="",  # デバイスIDは未定なので空文字（またはNone）
+            offset_minutes=0   # ズレ時間も初期値の0
+        )
+        db.add(setting)
+        db.commit()
+        db.refresh(setting)
+        print(f"✨ 新規ユーザー '{discord_id}' をDBに登録しました！")
+    else:
+        print(f"👍 ユーザー '{discord_id}' は既に存在するため、既存の設定を維持します。")
+        
+    return setting
+
+def schedule_attack(db: Session, discord_id: str):
+    setting = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == discord_id).first()
+    
+    # 30分〜120分の間でランダムに生成
+    random_offset = random.randint(30, 120)
+    
+    if setting:
+        setting.offset_minutes = random_offset # type: ignore
+        setting.is_attack_scheduled = True # type: ignore
+    else:
+        setting = models.UserSetting(
+            discord_user_id=discord_id,
+            mdm_device_id="",
+            offset_minutes=random_offset,
+            is_attack_scheduled=True
+        )
+        db.add(setting)
+    
+    db.commit()
+    return random_offset

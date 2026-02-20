@@ -1,8 +1,10 @@
-fastapi
+fastapi[standard]
 uvicorn
-sqlalchemy
-apscheduler
-pydantic
 requests
+sqlalchemy
+gpiozero
+rpi-lgpio
+apscheduler
+bless
 discord.py
 python-dotenv
