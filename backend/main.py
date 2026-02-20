@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 PROFILE_TOKYO = os.getenv("MDM_PROFILE_TOKYO")
-PROFILE_WARP = os.getenv("MDM_PROFILE_GMT10")
+PROFILE_GMT10 = os.getenv("MDM_PROFILE_GMT10")
 
 # DBテーブル作成
 models.Base.metadata.create_all(bind=engine)
@@ -84,7 +84,7 @@ def execute_button_action(press_duration):
         finally:
             db.close()
 
-        change_timezone(PROFILE_WARP)
+        change_timezone(PROFILE_GMT10)
     else:
         print("🛡️ 【長押し検知】Windowsへ時間を元に戻す命令を送信します！")
         payload = {"action": "restore"}
