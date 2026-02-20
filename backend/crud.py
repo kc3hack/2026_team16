@@ -34,3 +34,27 @@ def get_all_settings(db: Session):
     深夜0時の自動実行時に使用する。
     """
     return db.query(models.UserSetting).all()
+
+# ＝＝＝ ③ スマホ(BLE)から初期設定された時の処理 ＝＝＝
+def register_user_from_ble(db: Session, discord_id: str):
+    """
+    BLE通信でDiscord IDが送られてきた時の処理。
+    既存ユーザーなら設定を壊さないように何もしない。新規なら枠だけ作る。
+    """
+    setting = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == discord_id).first()
+    
+    if not setting:
+        # まだデータベースにいない新規ユーザーなら、初期値で作成
+        setting = models.UserSetting(
+            discord_user_id=discord_id,
+            mdm_device_id="",  # デバイスIDは未定なので空文字（またはNone）
+            offset_minutes=0   # ズレ時間も初期値の0
+        )
+        db.add(setting)
+        db.commit()
+        db.refresh(setting)
+        print(f"✨ 新規ユーザー '{discord_id}' をDBに登録しました！")
+    else:
+        print(f"👍 ユーザー '{discord_id}' は既に存在するため、既存の設定を維持します。")
+        
+    return setting

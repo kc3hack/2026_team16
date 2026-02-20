@@ -7,6 +7,7 @@ COPY requirements.txt .
 # requirements.txtがまだ空なら、直接指定でインストールもしておく
 RUN pip install --no-cache-dir -r requirements.txt || true
 RUN pip install --no-cache-dir fastapi[standard] uvicorn requests
+RUN apt-get update && apt-get install -y network-manager
 
 # 全ファイルをコピー
 COPY . .

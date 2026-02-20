@@ -1,10 +1,10 @@
 services:
   engineer-hub:
     build: .
-    ports:
-      - "8000:8000"
+    network_mode: "host"
     privileged: true
     volumes:
+      - /var/run/dbus:/var/run/dbus  # Bluetooth通信の通り道をコンテナに繋ぐ
       - .:/app
       - /dev:/dev
     environment:

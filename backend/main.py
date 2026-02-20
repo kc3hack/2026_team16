@@ -2,17 +2,19 @@ from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
 from gpiozero import Button
-from datetime import datetime
 import time
 import threading
 import asyncio
 
 # 自作モジュール
-import models, schemas, crud
-from database import SessionLocal, engine
+import models
+import schemas
+import crud
+from database import SessionLocal, engine, Base
+from ble_test import run_ble_server  # BLEサーバーの関数
 
 # DBテーブル作成
-models.Base.metadata.create_all(bind=engine)
+Base.metadata.create_all(bind=engine)
 
 # ==========================
 # WebSocket接続マネージャー
@@ -79,12 +81,17 @@ def on_release():
     print(f"🔘 [Button] 離されました。押下時間: {press_duration:.2f}秒")
     threading.Thread(target=execute_button_action, args=(press_duration,)).start()
 
-# --- ライフスパンイベント ---
+# --- ライフスパンイベント (ここを1つに統合しました) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global loop
     loop = asyncio.get_running_loop()
     
+    # 1. BLEサーバーをバックグラウンドで起動
+    print("📡 BLEプロビジョニングサーバーを起動中...")
+    ble_task = asyncio.create_task(run_ble_server())
+    
+    # 2. GPIOボタンの設定
     global button
     try:
         button = Button(BUTTON_PIN, pull_up=True, bounce_time=0.05)
@@ -93,9 +100,18 @@ async def lifespan(app: FastAPI):
         print(f"✅ GPIO {BUTTON_PIN} is ready.")
     except Exception as e:
         print(f"⚠️ GPIO Init Error: {e}")
-    yield
-    # アプリ終了時の処理（今は特になし）
 
+    yield
+    
+    # --- 終了時の処理 ---
+    print("🛑 サーバー停止中。BLEサーバーを終了します...")
+    ble_task.cancel()
+    try:
+        await ble_task
+    except asyncio.CancelledError:
+        print("✅ BLEサーバーを正常に停止しました。")
+
+# アプリ生成 (統合したlifespanを指定)
 app = FastAPI(lifespan=lifespan)
 
 def get_db():
@@ -115,12 +131,10 @@ async def websocket_endpoint(websocket: WebSocket):
     print("💻 [WebSocket] Windows PCが接続しました！")
     try:
         while True:
-            # 接続維持のためだけに受信待機（変数は不要）
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
         print("🔌 [WebSocket] Windows PCが切断されました")
-
 
 @app.post("/api/settings/")
 def update_setting(setting: schemas.UserSettingCreate, db: Session = Depends(get_db)):
