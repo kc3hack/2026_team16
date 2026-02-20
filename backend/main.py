@@ -1,4 +1,5 @@
 import os
+import random
 from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
@@ -16,6 +17,7 @@ import schemas
 import crud
 from database import SessionLocal, engine, Base
 from ble_test import run_ble_server  # BLEサーバーの関数
+import ble_beacon_tx
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -61,32 +63,39 @@ def on_press():
 
 def execute_button_action(press_duration):
     if press_duration <= 3.0:
-        change_timezone(PROFILE_GMT10)
-        print("⚡ 【短押し検知】Windowsへ時間をずらす命令を送信します！")
-        db = SessionLocal()
-        try:
-            settings = crud.get_all_settings(db)
-            if not settings:
-                print("⚠️ DBにターゲットがいません。")
-                return
-            
-            offset = settings[0].offset_minutes 
-            print(f"🎯 ターゲット設定値: {offset}分 ずらします")
-            
-            payload = {"action": "shift", "offset_minutes": offset}
-            
-            if loop:
-                asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
-        finally:
-            db.close()
+        print("⚡ 【短押し検知】ランダムに時間をずらす命令を送信します！")
+        
+        # 🆕 1〜4のランダムな数字を生成し、30分を掛けてオフセットを計算
+        multiplier = random.randint(1, 4)
+        offset = multiplier * 30
+        print(f"🎲 ランダム決定: パターン{multiplier} -> {offset}分 ずらします")
 
+        # 1. MDM（スマホ）のタイムゾーンを海外（GMT+10など）に変更
+        change_timezone(PROFILE_GMT10)
+        
+        # 2. WindowsへWebSocket送信
+        payload = {"action": "shift", "offset_minutes": offset}
+        if loop:
+            asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
+            
+        # 3. 物理時計へBLE電波を発射！
+        print(f"📡 物理時計へ {offset}分 のタイムリープ電波を発信します...")
+        ble_beacon_tx.broadcast_time_burst(offset, repeat_count=3, interval_ms=100)
+        
     else:
-        print("🛡️ 【長押し検知】Windowsへ時間を元に戻す命令を送信します！")
+        print("🛡️ 【長押し検知】時間を元に戻す(復旧)命令を送信します！")
+        
+        # 1. MDM（スマホ）のタイムゾーンを東京に戻す
+        change_timezone(PROFILE_TOKYO)
+
+        # 2. WindowsへWebSocket送信
         payload = {"action": "restore"}
         if loop:
             asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
 
-        change_timezone(PROFILE_TOKYO)
+        # 3. 物理時計へ時間を戻す（オフセット0）電波を発射！
+        print("📡 物理時計へ復旧電波を発信します...")
+        ble_beacon_tx.broadcast_time_burst(0, repeat_count=3, interval_ms=100)
 
 def on_release():
     global press_start_time
@@ -150,18 +159,34 @@ async def midnight_attack():
     print("🕛 深夜0時です。タイムリープを開始します...")
     db = SessionLocal()
     try:
+        # 「予定が入っている（is_attack_scheduled == True）」ユーザーだけを探す
         settings = db.query(models.UserSetting).filter(models.UserSetting.is_attack_scheduled == True).all()
+        
         for user in settings:
+            # 🆕 ここで初めてランダムに1〜4を決める！
+            multiplier = random.randint(1, 4)
+            offset = multiplier * 30
+            print(f"🎲 {user.discord_user_id} のランダム決定: パターン{multiplier} -> {offset}分")
+
+            # 1. MDM（スマホ）※ひとまずGMT+10プロファイルを送信
+            change_timezone(PROFILE_GMT10)
+            
+            # 2. WindowsへWebSocket送信
             payload = {
                 "action": "shift",
                 "direction": "forward", 
-                "offset_minutes": user.offset_minutes
+                "offset_minutes": offset
             }
             await manager.broadcast(payload)
-            print(f"🚀 {user.discord_user_id} の時間を {user.offset_minutes}分 進めました")
+            print(f"🚀 Windows時間を {offset}分 進めました")
             
-            # 攻撃が終わったらフラグを戻す
+            # 3. 物理時計へBLE電波を発射！
+            print(f"📡 物理時計へ {offset}分 のタイムリープ電波を発信します...")
+            ble_beacon_tx.broadcast_time_burst(offset, repeat_count=5)
+            
+            # 攻撃が終わったら予定フラグをOFFに戻す
             user.is_attack_scheduled = False # type: ignore
+            
         db.commit()
     finally:
         db.close()
