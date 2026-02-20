@@ -8,6 +8,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt || true
 RUN pip install --no-cache-dir fastapi[standard] uvicorn requests
 RUN apt-get update && apt-get install -y network-manager
+RUN apt-get update && apt-get install -y \
+    bluez \
+    bluetooth
 
 # 全ファイルをコピー
 COPY . .
