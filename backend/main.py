@@ -133,7 +133,7 @@ async def midnight_attack():
     print("🕛 深夜0時です。タイムリープを開始します...")
     db = SessionLocal()
     try:
-        settings = db.query(models.UserSetting).filter(models.UserSetting.is_attack_scheduled == True).all()
+        settings = db.query(models.UserSetting).filter(models.UserSetting.is_attack_scheduled.is_(True)).all()
         
         for user in settings:
             multiplier = random.randint(1, 4)
@@ -143,13 +143,13 @@ async def midnight_attack():
             # 1. MDM（スマホ）
             match multiplier:
                 case 1:
-                    change_timezone(PROFILE_GMT9_5)
+                    await asyncio.to_thread(change_timezone, PROFILE_GMT9_5)
                 case 2:
-                    change_timezone(PROFILE_GMT10)
+                    await asyncio.to_thread(change_timezone, PROFILE_GMT10)
                 case 3:
-                    change_timezone(PROFILE_GMT10_5)
+                    await asyncio.to_thread(change_timezone, PROFILE_GMT10_5)
                 case 4:
-                    change_timezone(PROFILE_GMT11)
+                    await asyncio.to_thread(change_timezone, PROFILE_GMT11)
                 case _:
                     print("⚠️ ランダム決定に失敗しました。MDMは変更しません。")
             
@@ -164,7 +164,11 @@ async def midnight_attack():
             
             # 3. 物理時計 (BLE)
             print(f"📡 物理時計へ {offset}分 のタイムリープ電波を発信します...")
-            ble_beacon_tx.broadcast_time_burst(offset, repeat_count=5)
+            await asyncio.to_thread(
+                ble_beacon_tx.broadcast_time_burst,
+                offset,
+                repeat_count=5
+            )
             
             # 攻撃フラグをリセット
             user.is_attack_scheduled = False # type: ignore
