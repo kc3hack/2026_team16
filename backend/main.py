@@ -84,26 +84,26 @@ def execute_button_action(press_duration):
         finally:
             db.close()
 
-        ok = mdm_client.change_timezone(PROFILE_WARP)  # 🆕 スマートフォンのタイムゾーン変更
-        if not ok:
-            print("⚠️ MDMタイムゾーン変更に失敗しました")
-            return {"status": "error", "message": "MDM timezone change failed"}
+        change_timezone(PROFILE_WARP)
     else:
         print("🛡️ 【長押し検知】Windowsへ時間を元に戻す命令を送信します！")
         payload = {"action": "restore"}
         if loop:
             asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
 
-        ok = mdm_client.change_timezone(PROFILE_TOKYO)  # 🆕 スマートフォンのタイムゾーンを元に戻す
-        if not ok:
-            print("⚠️ MDMタイムゾーン復元に失敗しました")
-            return {"status": "error", "message": "MDM timezone restore failed"}
+        change_timezone(PROFILE_TOKYO)
 
 def on_release():
     global press_start_time
     press_duration = time.time() - press_start_time
     print(f"🔘 [Button] 離されました。押下時間: {press_duration:.2f}秒")
     threading.Thread(target=execute_button_action, args=(press_duration,)).start()
+
+def change_timezone(profile_id):
+    ok = mdm_client.change_timezone(profile_id)  # 🆕 スマートフォンのタイムゾーン変更
+    if not ok:
+        print("⚠️ MDMタイムゾーン変更に失敗しました")
+        return {"status": "error", "message": "MDM timezone change failed"}
 
 # --- ライフスパンイベント (ここを1つに統合しました) ---
 @asynccontextmanager
