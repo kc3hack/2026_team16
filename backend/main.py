@@ -1,20 +1,25 @@
 import os
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
+from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from typing import Dict, List
-from dotenv import load_dotenv
+from gpiozero import Button
+from pydantic import BaseModel
+import time
+import threading
+import asyncio
 
 # 自作モジュール
-import models, schemas, crud
-from database import SessionLocal, engine
-from mdm_client import MDMClient  # 🆕 MDMクライアントをインポート
+import models
+import schemas
+import crud
+from database import SessionLocal, engine, Base
+from ble_test import run_ble_server  # BLEサーバーの関数
+from dotenv import load_dotenv
 
-# 環境変数の読み込み (プロファイルID取得用)
 load_dotenv()
 PROFILE_TOKYO = os.getenv("MDM_PROFILE_TOKYO")
-PROFILE_WARP = os.getenv("MDM_PROFILE_GMT10")  # 時空を歪ませる用（+8:00など）
+PROFILE_WARP = os.getenv("MDM_PROFILE_GMT10")
 
 # DBテーブル作成
 models.Base.metadata.create_all(bind=engine)
@@ -25,101 +30,116 @@ models.Base.metadata.create_all(bind=engine)
 mdm_client = MDMClient()  # 🆕 インスタンス作成
 
 # ==========================
-#  WebSocket 接続管理マネージャー
+# WebSocket接続マネージャー
 # ==========================
 class ConnectionManager:
     def __init__(self):
-        # user_id ごとに接続されているデバイス(WebSocket)をリストで保持
-        self.active_connections: Dict[int, List[WebSocket]] = {}
+        self.active_connections: list[WebSocket] = []
 
-    async def connect(self, user_id: int, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket):
         await websocket.accept()
-        if user_id not in self.active_connections:
-            self.active_connections[user_id] = []
-        self.active_connections[user_id].append(websocket)
-        print(f"[WebSocket] User {user_id} connected. Active devices: {len(self.active_connections[user_id])}")
+        self.active_connections.append(websocket)
 
-    def disconnect(self, user_id: int, websocket: WebSocket):
-        if user_id in self.active_connections:
-            self.active_connections[user_id].remove(websocket)
-            if not self.active_connections[user_id]:
-                del self.active_connections[user_id]
-        print(f"[WebSocket] User {user_id} disconnected.")
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
 
-    async def broadcast_to_user(self, user_id: int, message: dict):
-        """特定のユーザーの全デバイスにJSON形式で命令を送る"""
-        if user_id in self.active_connections:
-            for connection in self.active_connections[user_id]:
+    async def broadcast(self, message: dict):
+        for connection in self.active_connections:
+            try:
                 await connection.send_json(message)
-            print(f"[WebSocket] Broadcasted to User {user_id}: {message}")
+            except Exception as e:
+                print(f"⚠️ WebSocket送信エラー: {e}")
 
 manager = ConnectionManager()
+loop = None
 
+# --- GPIO設定 ---
+BUTTON_PIN = 17
+button = None
+press_start_time = 0
 
-# ==========================
-#  バッチ処理: 0:00に時空を歪ませる
-# ==========================
-async def update_daily_offsets_and_push():
-    print("🕛 0:00になりました。時空の歪みを計算します...")
-    
-    # 新しいDBセッションを作成
-    db = SessionLocal()
-    try:
-        # 全ユーザーを取得
-        users = crud.get_users(db)
-        
-        for user in users:
-            # 1. 今日の予定があるかチェック
-            has_plan = crud.has_plan_today(db, user.id)
-            
-            # 2. ズレ時間を決定 (予定ありなら60分進める、なしなら0分に戻す)
-            new_offset = 60 if has_plan else 0
-            
-            # 3. DBを更新
-            crud.update_offset(db, user_id=user.id, offset_minutes=new_offset)
-            
-            # 4. WebSocketでアプリ画面(React等)に指令を飛ばす
-            message = {
-                "type": "OFFSET_UPDATE",
-                "offset_minutes": new_offset,
-                "reason": "DAILY_UPDATE"
-            }
-            await manager.broadcast_to_user(user.id, message)
-            
-            # 5. 🆕 MDMで物理デバイスのタイムゾーンを強制変更
-            # ズレがある(60分)ならWARP用、ない(0分)ならTOKYO用を適用
-            target_profile = PROFILE_WARP if new_offset > 0 else PROFILE_TOKYO
-            
-            if target_profile:
-                print(f"📱 MDM Sending: User {user.id} -> Profile {target_profile}")
-                # ※注: 今回はデモ用として.envのDEVICE_IDに固定送信します
-                # 複数ユーザー対応時はuserテーブルにdevice_idカラムを持たせて分岐させます
-                mdm_client.change_timezone(target_profile)
-            
-            status = "歪ませました(+60min)" if has_plan else "正常に戻しました(0min)"
-            print(f"User {user.id}: {status}")
-            
-    except Exception as e:
-        print(f"❌ バッチ処理エラー: {e}")
-    finally:
-        db.close()
+def on_press():
+    global press_start_time
+    press_start_time = time.time()
+    print("🔘 [Button] 押されました。時間計測スタート...")
 
-# --- スケジューラーの設定 ---
-scheduler = AsyncIOScheduler()
-scheduler.add_job(update_daily_offsets_and_push, 'cron', hour=0, minute=0)
+def execute_button_action(press_duration):
+    if press_duration <= 3.0:
+        print("⚡ 【短押し検知】Windowsへ時間をずらす命令を送信します！")
+        db = SessionLocal()
+        try:
+            settings = crud.get_all_settings(db)
+            if not settings:
+                print("⚠️ DBにターゲットがいません。")
+                return
+            
+            offset = settings[0].offset_minutes 
+            print(f"🎯 ターゲット設定値: {offset}分 ずらします")
+            
+            payload = {"action": "shift", "offset_minutes": offset}
+            
+            if loop:
+                asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
+        finally:
+            db.close()
 
-# --- ライフスパンイベント（起動時と終了時の処理） ---
+        mdm_client.change_timezone(PROFILE_WARP)  # 🆕 スマートフォンのタイムゾーン変更
+    else:
+        print("🛡️ 【長押し検知】Windowsへ時間を元に戻す命令を送信します！")
+        payload = {"action": "restore"}
+        if loop:
+            asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
+
+        mdm_client.change_timezone(PROFILE_TOKYO)  # 🆕 スマートフォンのタイムゾーンを元に戻す
+
+def on_release():
+    global press_start_time
+    press_duration = time.time() - press_start_time
+    print(f"🔘 [Button] 離されました。押下時間: {press_duration:.2f}秒")
+    threading.Thread(target=execute_button_action, args=(press_duration,)).start()
+
+# --- ライフスパンイベント (ここを1つに統合しました) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("Starting Scheduler...")
+    global loop
+    loop = asyncio.get_running_loop()
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(midnight_attack, 'cron', minute='*') # テスト用
+    # scheduler.add_job(midnight_attack, 'cron', hour=0, minute=0)  毎日0時に実行
     scheduler.start()
-    yield
-    print("Stopping Scheduler...")
-    scheduler.shutdown()
+    print("⏰ スケジューラーが起動しました（毎日0時実行）")
 
+    # 1. BLEサーバーをバックグラウンドで起動
+    print("📡 BLEプロビジョニングサーバーを起動中...")
+    ble_task = asyncio.create_task(run_ble_server())
+    
+    # 1. BLEサーバーをバックグラウンドで起動
+    print("📡 BLEプロビジョニングサーバーを起動中...")
+    ble_task = asyncio.create_task(run_ble_server())
+    
+    # 2. GPIOボタンの設定
+    global button
+    try:
+        button = Button(BUTTON_PIN, pull_up=True, bounce_time=0.05)
+        button.when_pressed = on_press
+        button.when_released = on_release
+        print(f"✅ GPIO {BUTTON_PIN} is ready.")
+    except Exception as e:
+        print(f"⚠️ GPIO Init Error: {e}")
+
+    yield
+    
+    # --- 終了時の処理 ---
+    print("🛑 サーバー停止中。BLEサーバーを終了します...")
+    ble_task.cancel()
+    try:
+        await ble_task
+    except asyncio.CancelledError:
+        print("✅ BLEサーバーを正常に停止しました。")
+
+# アプリ生成 (統合したlifespanを指定)
 app = FastAPI(lifespan=lifespan)
 
-# --- 依存関係 (DBセッション取得) ---
 def get_db():
     db = SessionLocal()
     try:
@@ -127,81 +147,59 @@ def get_db():
     finally:
         db.close()
 
+async def midnight_attack():
+    print("🕛 深夜0時です。タイムリープを開始します...")
+    db = SessionLocal()
+    try:
+        settings = db.query(models.UserSetting).filter(models.UserSetting.is_attack_scheduled == True).all()
+        for user in settings:
+            payload = {
+                "action": "shift",
+                "direction": "forward", 
+                "offset_minutes": user.offset_minutes
+            }
+            await manager.broadcast(payload)
+            print(f"🚀 {user.discord_user_id} の時間を {user.offset_minutes}分 進めました")
+            
+            # 攻撃が終わったらフラグを戻す
+            user.is_attack_scheduled = False # type: ignore
+        db.commit()
+    finally:
+        db.close()
 
 # ==========================
 #          API 定義
 # ==========================
 
-# 0. WebSocketエンドポイント
-@app.websocket("/ws/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: int):
-    await manager.connect(user_id, websocket)
+@app.websocket("/ws/windows")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    print("💻 [WebSocket] Windows PCが接続しました！")
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        manager.disconnect(user_id, websocket)
+        manager.disconnect(websocket)
+        print("🔌 [WebSocket] Windows PCが切断されました")
 
+@app.post("/api/settings/")
+def update_setting(setting: schemas.UserSettingCreate, db: Session = Depends(get_db)):
+    updated_setting = crud.upsert_user_setting(
+        db=db,
+        discord_id=setting.discord_user_id,
+        device_id=setting.mdm_device_id,
+        offset=setting.offset_minutes
+    )
+    print(f"📥 [DB保存] DiscordID: {setting.discord_user_id}, 端末: {setting.mdm_device_id}, ズレ: {setting.offset_minutes}分")
+    return {"status": "success", "message": "設定を保存しました"}
 
-# 1. ユーザー作成 (Botが自動登録する際にも使用)
-@app.post("/users/", response_model=schemas.User)
-def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    return crud.create_user(db=db, user=user)
+class PlanRequest(BaseModel):
+    discord_user_id: str
 
-
-# 2. Discord ID からユーザーを検索 (Bot用)
-@app.get("/users/discord/{discord_user_id}", response_model=schemas.User)
-def read_user_by_discord(discord_user_id: str, db: Session = Depends(get_db)):
-    db_user = crud.get_user_by_discord_id(db, discord_user_id=discord_user_id)
-    if db_user is None:
-        raise HTTPException(status_code=404, detail="User not found")
-    return db_user
-
-
-# 3. 現在のズレ時間を取得
-@app.get("/offset/{user_id}", response_model=schemas.User)
-def read_user_offset(user_id: int, db: Session = Depends(get_db)):
-    db_user = crud.get_user(db, user_id=user_id)
-    if db_user is None:
-        raise HTTPException(status_code=404, detail="User not found")
-    return db_user
-
-
-# 4. 手動で時間をずらす (テスト用 & 即時反映)
-@app.put("/offset/{user_id}")
-async def update_time(user_id: int, time_data: schemas.TimeUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    # DB更新
-    updated_user = crud.update_offset(db, user_id=user_id, offset_minutes=time_data.offset_minutes)
-    if updated_user is None:
-        raise HTTPException(status_code=404, detail="User not found")
+@app.post("/api/plan/")
+def register_plan(plan: PlanRequest, db: Session = Depends(get_db)):
+    # crud.pyに作った関数を呼んで、ランダムな時間を生成＆フラグを立てる
+    offset = crud.schedule_attack(db, plan.discord_user_id)
     
-    # WebSocket通知（アプリ画面用）
-    await manager.broadcast_to_user(user_id, {
-        "type": "OFFSET_UPDATE",
-        "offset_minutes": time_data.offset_minutes,
-        "reason": "MANUAL_UPDATE"
-    })
-
-    # 🆕 MDMで物理デバイス変更
-    # offsetが0なら東京、それ以外なら時空歪曲
-    target_profile = PROFILE_WARP if time_data.offset_minutes > 0 else PROFILE_TOKYO
-    if target_profile:
-        print(f"📱 MDM Manual Update: Applying Profile {target_profile}")
-        background_tasks.add_task(mdm_client.change_timezone, target_profile)
-    
-    return {"message": f"User {user_id}'s time has been shifted by {time_data.offset_minutes} minutes."}
-
-
-# 5. 予定作成 (Bot用)
-@app.post("/users/{user_id}/schedules/", response_model=schemas.Schedule)
-def create_schedule(user_id: int, schedule: schemas.ScheduleCreate, db: Session = Depends(get_db)):
-    return crud.create_schedule(db=db, schedule=schedule, user_id=user_id)
-
-# 6. 🆕 デバッグ用エンドポイント (MDM疎通確認用)
-@app.post("/debug/mdm/reset")
-def debug_reset_timezone():
-    """強制的に東京時間に戻す（デバッグ用）"""
-    if PROFILE_TOKYO:
-        mdm_client.change_timezone(PROFILE_TOKYO)
-        return {"status": "Reset command sent", "profile": PROFILE_TOKYO}
-    return {"status": "Error", "detail": "PROFILE_TOKYO not set in .env"}
+    print(f"🎯 [予約完了] DiscordID: {plan.discord_user_id} に {offset}分の攻撃をセットしました！")
+    return {"status": "success", "message": f"攻撃予約完了（{offset}分）"}
