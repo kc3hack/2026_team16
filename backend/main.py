@@ -23,7 +23,10 @@ from mdm_client import MDMClient
 # 環境変数の読み込み
 load_dotenv()
 PROFILE_TOKYO = os.getenv("MDM_PROFILE_TOKYO")
+PROFILE_GMT9_5 = os.getenv("MDM_PROFILE_GMT9_5")
 PROFILE_GMT10 = os.getenv("MDM_PROFILE_GMT10")
+PROFILE_GMT10_5 = os.getenv("MDM_PROFILE_GMT10_5")
+PROFILE_GMT11 = os.getenv("MDM_PROFILE_GMT11")
 
 # DBテーブル作成
 models.Base.metadata.create_all(bind=engine)
@@ -81,7 +84,17 @@ def execute_button_action(press_duration):
         print(f"🎲 ランダム決定: パターン{multiplier} -> {offset}分 ずらします")
 
         # 1. MDM（スマホ）
-        change_timezone(PROFILE_GMT10)
+        match multiplier:
+            case 1:
+                change_timezone(PROFILE_GMT9_5)
+            case 2:
+                change_timezone(PROFILE_GMT10)
+            case 3:
+                change_timezone(PROFILE_GMT10_5)
+            case 4:
+                change_timezone(PROFILE_GMT11)
+            case _:
+                print("⚠️ ランダム決定に失敗しました。MDMは変更しません。")
         
         # 2. Windows PC (WebSocket)
         payload = {"action": "shift", "offset_minutes": offset}
@@ -128,7 +141,17 @@ async def midnight_attack():
             print(f"🎲 {user.discord_user_id} のランダム決定: パターン{multiplier} -> {offset}分")
 
             # 1. MDM（スマホ）
-            change_timezone(PROFILE_GMT10)
+            match multiplier:
+                case 1:
+                    change_timezone(PROFILE_GMT9_5)
+                case 2:
+                    change_timezone(PROFILE_GMT10)
+                case 3:
+                    change_timezone(PROFILE_GMT10_5)
+                case 4:
+                    change_timezone(PROFILE_GMT11)
+                case _:
+                    print("⚠️ ランダム決定に失敗しました。MDMは変更しません。")
             
             # 2. Windows PC (WebSocket)
             payload = {
