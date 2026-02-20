@@ -6,3 +6,5 @@ gpiozero
 rpi-lgpio
 apscheduler
 bless
+discord.py
+python-dotenv
