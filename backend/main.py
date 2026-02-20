@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
@@ -7,6 +8,7 @@ from pydantic import BaseModel
 import time
 import threading
 import asyncio
+from mdm_client import MDMClient
 
 # 自作モジュール
 import models
@@ -14,9 +16,14 @@ import schemas
 import crud
 from database import SessionLocal, engine, Base
 from ble_test import run_ble_server  # BLEサーバーの関数
+from dotenv import load_dotenv
+
+load_dotenv()
+PROFILE_TOKYO = os.getenv("MDM_PROFILE_TOKYO")
+PROFILE_GMT10 = os.getenv("MDM_PROFILE_GMT10")
 
 # DBテーブル作成
-Base.metadata.create_all(bind=engine)
+models.Base.metadata.create_all(bind=engine)
 
 # ==========================
 # WebSocket接続マネージャー
@@ -54,6 +61,7 @@ def on_press():
 
 def execute_button_action(press_duration):
     if press_duration <= 3.0:
+        change_timezone(PROFILE_GMT10)
         print("⚡ 【短押し検知】Windowsへ時間をずらす命令を送信します！")
         db = SessionLocal()
         try:
@@ -71,17 +79,27 @@ def execute_button_action(press_duration):
                 asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
         finally:
             db.close()
+
     else:
         print("🛡️ 【長押し検知】Windowsへ時間を元に戻す命令を送信します！")
         payload = {"action": "restore"}
         if loop:
             asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
 
+        change_timezone(PROFILE_TOKYO)
+
 def on_release():
     global press_start_time
     press_duration = time.time() - press_start_time
     print(f"🔘 [Button] 離されました。押下時間: {press_duration:.2f}秒")
     threading.Thread(target=execute_button_action, args=(press_duration,)).start()
+
+def change_timezone(profile_id):
+    mdm_client = MDMClient()
+    ok = mdm_client.change_timezone(profile_id)  # 🆕 スマートフォンのタイムゾーン変更
+    if not ok:
+        print("⚠️ MDMタイムゾーン変更に失敗しました")
+        return {"status": "error", "message": "MDM timezone change failed"}
 
 # --- ライフスパンイベント (ここを1つに統合しました) ---
 @asynccontextmanager
@@ -94,10 +112,6 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     print("⏰ スケジューラーが起動しました（毎日0時実行）")
 
-    # 1. BLEサーバーをバックグラウンドで起動
-    print("📡 BLEプロビジョニングサーバーを起動中...")
-    ble_task = asyncio.create_task(run_ble_server())
-    
     # 1. BLEサーバーをバックグラウンドで起動
     print("📡 BLEプロビジョニングサーバーを起動中...")
     ble_task = asyncio.create_task(run_ble_server())
