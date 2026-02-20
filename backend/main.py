@@ -8,6 +8,7 @@ from pydantic import BaseModel
 import time
 import threading
 import asyncio
+from mdm_client import MDMClient
 
 # 自作モジュール
 import models
@@ -83,14 +84,20 @@ def execute_button_action(press_duration):
         finally:
             db.close()
 
-        mdm_client.change_timezone(PROFILE_WARP)  # 🆕 スマートフォンのタイムゾーン変更
+        ok = mdm_client.change_timezone(PROFILE_WARP)  # 🆕 スマートフォンのタイムゾーン変更
+        if not ok:
+            print("⚠️ MDMタイムゾーン変更に失敗しました")
+            return {"status": "error", "message": "MDM timezone change failed"}
     else:
         print("🛡️ 【長押し検知】Windowsへ時間を元に戻す命令を送信します！")
         payload = {"action": "restore"}
         if loop:
             asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
 
-        mdm_client.change_timezone(PROFILE_TOKYO)  # 🆕 スマートフォンのタイムゾーンを元に戻す
+        ok = mdm_client.change_timezone(PROFILE_TOKYO)  # 🆕 スマートフォンのタイムゾーンを元に戻す
+        if not ok:
+            print("⚠️ MDMタイムゾーン復元に失敗しました")
+            return {"status": "error", "message": "MDM timezone restore failed"}
 
 def on_release():
     global press_start_time

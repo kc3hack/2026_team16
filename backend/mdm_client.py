@@ -10,7 +10,7 @@ class MDMClient:
         # 認証サーバー (日本DC)
         self.auth_url = "https://accounts.zoho.jp/oauth/v2/token"
         # MDM API エンドポイント (日本DC)
-        self.base_url = "https://mdm.manageengine.jp/api/v1"
+        self.base_url = "https://mdm.manageengine.jp/api/v1/mdm"
         
         self.client_id = os.getenv("MDM_CLIENT_ID")
         self.client_secret = os.getenv("MDM_CLIENT_SECRET")
@@ -47,12 +47,13 @@ class MDMClient:
         url = f"{self.base_url}/devices/{self.device_id}/profiles"
         headers = {
             "Authorization": f"Zoho-oauthtoken {token}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Accept": "application/json"
         }
         data = {"profile_ids": [profile_id]}
 
         try:
-            res = requests.post(url, headers=headers, json=data)
+            res = requests.post(url, headers=headers, json=data, timeout=30)
             
             # 200: OK, 201: Created, 202: Accepted
             if res.status_code in [200, 201, 202]:
