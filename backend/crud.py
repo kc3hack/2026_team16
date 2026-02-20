@@ -61,22 +61,25 @@ def register_user_from_ble(db: Session, discord_id: str):
     return setting
 
 def schedule_attack(db: Session, discord_id: str):
-    setting = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == discord_id).first()
+    # ユーザーを探す
+    user_setting = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == discord_id).first()
     
-    # 30分〜120分の間でランダムに生成
-    random_offset = random.randint(30, 120)
-    
-    if setting:
-        setting.offset_minutes = random_offset # type: ignore
-        setting.is_attack_scheduled = True # type: ignore
+    if user_setting:
+        # 既にユーザーがいれば、攻撃予定フラグだけをONにする
+        user_setting.is_attack_scheduled = True # type: ignore
     else:
-        setting = models.UserSetting(
+        # もしDBにユーザーがいなければ、新規作成してフラグをONにする
+        user_setting = models.UserSetting(
             discord_user_id=discord_id,
-            mdm_device_id="",
-            offset_minutes=random_offset,
+            mdm_device_id="",  # 初期値
+            offset_minutes=0,  # 実行時に決めるので0でOK
             is_attack_scheduled=True
         )
-        db.add(setting)
-    
+        db.add(user_setting)
+        
     db.commit()
-    return random_offset
+    db.refresh(user_setting)
+    
+    # 以前は offset（ズレ時間）を返していましたが、
+    # 今回からは「成功したかどうかのTrue」だけを返します
+    return True
