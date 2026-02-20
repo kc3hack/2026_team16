@@ -1,6 +1,7 @@
 # crud.py
 from sqlalchemy.orm import Session
 import models
+import random
 
 # ＝＝＝ ① Discord Botが動いた時に「保存」する処理 ＝＝＝
 def upsert_user_setting(db: Session, discord_id: str, device_id: str, offset: int):
@@ -58,3 +59,24 @@ def register_user_from_ble(db: Session, discord_id: str):
         print(f"👍 ユーザー '{discord_id}' は既に存在するため、既存の設定を維持します。")
         
     return setting
+
+def schedule_attack(db: Session, discord_id: str):
+    setting = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == discord_id).first()
+    
+    # 30分〜120分の間でランダムに生成
+    random_offset = random.randint(30, 120)
+    
+    if setting:
+        setting.offset_minutes = random_offset # type: ignore
+        setting.is_attack_scheduled = True # type: ignore
+    else:
+        setting = models.UserSetting(
+            discord_user_id=discord_id,
+            mdm_device_id="",
+            offset_minutes=random_offset,
+            is_attack_scheduled=True
+        )
+        db.add(setting)
+    
+    db.commit()
+    return random_offset

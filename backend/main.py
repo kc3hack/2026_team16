@@ -1,7 +1,9 @@
 from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
 from gpiozero import Button
+from pydantic import BaseModel
 import time
 import threading
 import asyncio
@@ -86,6 +88,15 @@ def on_release():
 async def lifespan(app: FastAPI):
     global loop
     loop = asyncio.get_running_loop()
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(midnight_attack, 'cron', minute='*') # テスト用
+    # scheduler.add_job(midnight_attack, 'cron', hour=0, minute=0)  毎日0時に実行
+    scheduler.start()
+    print("⏰ スケジューラーが起動しました（毎日0時実行）")
+
+    # 1. BLEサーバーをバックグラウンドで起動
+    print("📡 BLEプロビジョニングサーバーを起動中...")
+    ble_task = asyncio.create_task(run_ble_server())
     
     # 1. BLEサーバーをバックグラウンドで起動
     print("📡 BLEプロビジョニングサーバーを起動中...")
@@ -121,6 +132,26 @@ def get_db():
     finally:
         db.close()
 
+async def midnight_attack():
+    print("🕛 深夜0時です。タイムリープを開始します...")
+    db = SessionLocal()
+    try:
+        settings = db.query(models.UserSetting).filter(models.UserSetting.is_attack_scheduled == True).all()
+        for user in settings:
+            payload = {
+                "action": "shift",
+                "direction": "forward", 
+                "offset_minutes": user.offset_minutes
+            }
+            await manager.broadcast(payload)
+            print(f"🚀 {user.discord_user_id} の時間を {user.offset_minutes}分 進めました")
+            
+            # 攻撃が終わったらフラグを戻す
+            user.is_attack_scheduled = False # type: ignore
+        db.commit()
+    finally:
+        db.close()
+
 # ==========================
 #          API 定義
 # ==========================
@@ -146,3 +177,14 @@ def update_setting(setting: schemas.UserSettingCreate, db: Session = Depends(get
     )
     print(f"📥 [DB保存] DiscordID: {setting.discord_user_id}, 端末: {setting.mdm_device_id}, ズレ: {setting.offset_minutes}分")
     return {"status": "success", "message": "設定を保存しました"}
+
+class PlanRequest(BaseModel):
+    discord_user_id: str
+
+@app.post("/api/plan/")
+def register_plan(plan: PlanRequest, db: Session = Depends(get_db)):
+    # crud.pyに作った関数を呼んで、ランダムな時間を生成＆フラグを立てる
+    offset = crud.schedule_attack(db, plan.discord_user_id)
+    
+    print(f"🎯 [予約完了] DiscordID: {plan.discord_user_id} に {offset}分の攻撃をセットしました！")
+    return {"status": "success", "message": f"攻撃予約完了（{offset}分）"}

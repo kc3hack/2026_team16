@@ -5,9 +5,9 @@ import subprocess
 from database import SessionLocal
 import crud
 from bless import (
-    BlessServer,
-    GATTCharacteristicProperties,
-    GATTAttributePermissions
+    BlessServer,   #type: ignore
+    GATTCharacteristicProperties, #type: ignore
+    GATTAttributePermissions #type: ignore
 )
 
 logging.basicConfig(level=logging.INFO)
