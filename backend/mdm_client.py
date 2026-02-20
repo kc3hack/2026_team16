@@ -12,13 +12,30 @@ class MDMClient:
         # MDM API エンドポイント (日本DC)
         self.base_url = "https://mdm.manageengine.jp/api/v1/mdm"
         
-        self.client_id = os.getenv("MDM_CLIENT_ID")
-        self.client_secret = os.getenv("MDM_CLIENT_SECRET")
-        self.refresh_token = os.getenv("MDM_REFRESH_TOKEN")
-        self.device_id = os.getenv("MDM_DEVICE_ID")
+        self.client_id = (os.getenv("MDM_CLIENT_ID") or "").strip()
+        self.client_secret = (os.getenv("MDM_CLIENT_SECRET") or "").strip()
+        self.refresh_token = (os.getenv("MDM_REFRESH_TOKEN") or "").strip()
+        self.device_id = (os.getenv("MDM_DEVICE_ID") or "").strip()
+
+    def _missing_env_keys(self):
+        missing = []
+        if not self.client_id:
+            missing.append("MDM_CLIENT_ID")
+        if not self.client_secret:
+            missing.append("MDM_CLIENT_SECRET")
+        if not self.refresh_token:
+            missing.append("MDM_REFRESH_TOKEN")
+        if not self.device_id:
+            missing.append("MDM_DEVICE_ID")
+        return missing
 
     def _get_access_token(self):
         """アクセストークンを再取得する内部メソッド"""
+        missing = self._missing_env_keys()
+        if missing:
+            print(f"[MDM] ❌ 必須環境変数が不足しています: {', '.join(missing)}")
+            return None
+
         try:
             payload = {
                 "refresh_token": self.refresh_token,
@@ -26,11 +43,32 @@ class MDMClient:
                 "client_secret": self.client_secret,
                 "grant_type": "refresh_token"
             }
-            res = requests.post(self.auth_url, data=payload)
-            res.raise_for_status()
-            return res.json().get("access_token")
+            res = requests.post(self.auth_url, data=payload, timeout=20)
+
+            if res.status_code != 200:
+                print(f"[MDM] ❌ Token HTTP Error: {res.status_code}")
+                print(f"[MDM] Response: {res.text}")
+                return None
+
+            body = res.json()
+            token = body.get("access_token")
+            if not token:
+                print(f"[MDM] ❌ access_token がレスポンスにありません: {body}")
+                return None
+
+            return token
+        except requests.exceptions.Timeout:
+            print("[MDM] ❌ Token Timeout: 認証サーバー応答待ちでタイムアウトしました")
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f"[MDM] ❌ Token Request Error: {e}")
+            return None
+        except ValueError as e:
+            print(f"[MDM] ❌ Token JSON Parse Error: {e}")
+            print(f"[MDM] Raw Response: {res.text if 'res' in locals() else 'N/A'}")
+            return None
         except Exception as e:
-            print(f"[MDM] Token Error: {e}")
+            print(f"[MDM] ❌ Token Unknown Error: {e}")
             return None
 
     def change_timezone(self, profile_id):

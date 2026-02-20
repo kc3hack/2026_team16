@@ -26,11 +26,6 @@ PROFILE_GMT10 = os.getenv("MDM_PROFILE_GMT10")
 models.Base.metadata.create_all(bind=engine)
 
 # ==========================
-#  MDM クライアント初期化
-# ==========================
-mdm_client = MDMClient()  # 🆕 インスタンス作成
-
-# ==========================
 # WebSocket接続マネージャー
 # ==========================
 class ConnectionManager:
@@ -66,6 +61,7 @@ def on_press():
 
 def execute_button_action(press_duration):
     if press_duration <= 3.0:
+        change_timezone(PROFILE_GMT10)
         print("⚡ 【短押し検知】Windowsへ時間をずらす命令を送信します！")
         db = SessionLocal()
         try:
@@ -84,7 +80,6 @@ def execute_button_action(press_duration):
         finally:
             db.close()
 
-        change_timezone(PROFILE_GMT10)
     else:
         print("🛡️ 【長押し検知】Windowsへ時間を元に戻す命令を送信します！")
         payload = {"action": "restore"}
@@ -100,6 +95,7 @@ def on_release():
     threading.Thread(target=execute_button_action, args=(press_duration,)).start()
 
 def change_timezone(profile_id):
+    mdm_client = MDMClient()
     ok = mdm_client.change_timezone(profile_id)  # 🆕 スマートフォンのタイムゾーン変更
     if not ok:
         print("⚠️ MDMタイムゾーン変更に失敗しました")
@@ -116,10 +112,6 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     print("⏰ スケジューラーが起動しました（毎日0時実行）")
 
-    # 1. BLEサーバーをバックグラウンドで起動
-    print("📡 BLEプロビジョニングサーバーを起動中...")
-    ble_task = asyncio.create_task(run_ble_server())
-    
     # 1. BLEサーバーをバックグラウンドで起動
     print("📡 BLEプロビジョニングサーバーを起動中...")
     ble_task = asyncio.create_task(run_ble_server())
