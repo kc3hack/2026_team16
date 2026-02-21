@@ -1,5 +1,5 @@
 import discord
-imporr asyncio
+import asyncio
 from discord.ext import commands
 import requests
 import os
@@ -77,7 +77,7 @@ async def register_schedule_from_mentions(ctx, content: str, command_name: str):
     }
 
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        response = await asyncio.to_thread(requests.post, url, json=payload, timeout=10)
         if response.status_code != 200:
             await ctx.send(f"⚠️ サーバーとの通信に失敗しました。status={response.status_code}")
             return

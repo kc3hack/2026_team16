@@ -64,19 +64,14 @@ def register_user_from_ble(db: Session, discord_id: str):
 def schedule_attack(db: Session, discord_id: str):
     # ユーザーを探す
     user_setting = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == discord_id).first()
+
+    if not user_setting:
+        print(f"⚠️ 未登録ユーザーのため攻撃予約しません: {discord_id}")
+        return False
     
     if user_setting:
-        # 既にユーザーがいれば、攻撃予定フラグだけをONにする
-        user_setting.is_attack_scheduled = True # type: ignore
-    else:
-        # もしDBにユーザーがいなければ、新規作成してフラグをONにする
-        user_setting = models.UserSetting(
-            discord_user_id=discord_id,
-            mdm_device_id="",  # 初期値
-            offset_minutes=0,  # 実行時に決めるので0でOK
-            is_attack_scheduled=True
-        )
-        db.add(user_setting)
+    # 既にユーザーがいれば、攻撃予定フラグをONにする
+    user_setting.is_attack_scheduled = True # type: ignore
         
     db.commit()
     db.refresh(user_setting)
