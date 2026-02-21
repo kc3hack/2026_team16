@@ -38,10 +38,10 @@ def get_all_settings(db: Session):
     return db.query(models.UserSetting).all()
 
 # ＝＝＝ ③ スマホ(BLE)から初期設定された時の処理 ＝＝＝
-def register_user_from_ble(db: Session, discord_id: str):
+def register_user_from_ble(db: Session, discord_id: str, mdm_device_id: str = None):
     """
-    BLE通信でDiscord IDが送られてきた時の処理。
-    既存ユーザーなら設定を壊さないように何もしない。新規なら枠だけ作る。
+    BLE通信でDiscord IDとMDM Device IDが送られてきた時の処理。
+    既存ユーザーならMDM IDを更新。新規なら枠を作って登録する。
     """
     setting = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == discord_id).first()
     normalized_device_id = (mdm_device_id or "").strip()
@@ -59,10 +59,10 @@ def register_user_from_ble(db: Session, discord_id: str):
         print(f"✨ 新規ユーザー '{discord_id}' をDBに登録しました！")
     else:
         if normalized_device_id:
-            setting.mdm_device_id = normalized_device_id  # ★追加
+            setting.mdm_device_id = normalized_device_id  # MDM IDを上書き
             db.commit()
             db.refresh(setting)
-        print(f"👍 ユーザー '{discord_id}' は既に存在するため、既存の設定を維持します。")
+        print(f"👍 ユーザー '{discord_id}' のMDM IDを更新しました。")
         
     return setting
 
