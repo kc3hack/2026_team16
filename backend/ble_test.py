@@ -36,8 +36,9 @@ def on_write_request(characteristic, value, **kwargs):
         ssid = data.get("ssid")
         wifi_pass = data.get("password")
         discord_id = data.get("discord_id")
+        mdm_device_id = data.get("mdm_device_id")
         
-        print(f"🎯 受信データ: SSID={ssid}, Discord={discord_id}")
+        print(f"🎯 受信データ: SSID={ssid}, Discord={discord_id}, MDM Device ID={mdm_device_id}")
 
         # 1. Wi-Fiの設定処理
         if ssid and wifi_pass:
@@ -59,7 +60,7 @@ def on_write_request(characteristic, value, **kwargs):
             db = SessionLocal()
             try:
                 # crud.pyに作ったBLE専用関数を呼び出す！
-                crud.register_user_from_ble(db, discord_id=discord_id)
+                crud.register_user_from_ble(db, discord_id=discord_id, mdm_device_id=mdm_device_id)
                 print(f"✅ Discord ID '{discord_id}' のDB連携処理が完了しました！")
                 
             except Exception as e:
