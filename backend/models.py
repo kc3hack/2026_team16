@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Boolean
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy.orm import relationship
 from database import Base
 
 class UserSetting(Base):
@@ -11,3 +12,14 @@ class UserSetting(Base):
     gmail = Column(String, nullable=True)                      # GoogleカレンダーのGmailアドレス
     google_access_token = Column(String, nullable=True)        # OAuthアクセストークン
     google_refresh_token = Column(String, nullable=True)       # OAuthリフレッシュトークン
+    schedules = relationship("Schedule", back_populates="user", cascade="all, delete-orphan")
+
+
+class Schedule(Base):
+    __tablename__ = "schedules"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("user_settings.id"), nullable=False, index=True)
+    title = Column(String, nullable=False)
+    scheduled_at = Column(DateTime, nullable=False, index=True)
+
+    user = relationship("UserSetting", back_populates="schedules")
