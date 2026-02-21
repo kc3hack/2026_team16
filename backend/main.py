@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
 from gpiozero import Button
 from pydantic import BaseModel
+from fastapi.responses import FileResponse
 
 # 自作モジュール
 import models
@@ -321,3 +322,7 @@ def get_wifi_ssids():
         return {"ssids": ssids}
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="wifi scan timeout")
+
+@app.get("/setup")
+def setup_page():
+    return FileResponse("backend/setup.html")
