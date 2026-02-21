@@ -6,11 +6,20 @@ from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 
-load_dotenv()
+load_dotenv(override=True)
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://127.0.0.1:8000/auth/callback")
+
+# Redirect URI の取得と ngrok ガード
+raw_redirect = os.getenv("GOOGLE_REDIRECT_URI", "http://127.0.0.1:8000/auth/callback")
+if "ngrok" in raw_redirect:
+    print(f"⚠️ [Security] ngrok URL Detected in Environment: {raw_redirect}")
+    REDIRECT_URI = "http://127.0.0.1:8000/auth/callback"
+else:
+    REDIRECT_URI = raw_redirect
+
+print(f"🌐 [Google OAuth] Redirect URI set to: {REDIRECT_URI}")
 # Googleカレンダーへの読み書き権限スコープ
 SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 
@@ -41,7 +50,7 @@ def get_auth_url(discord_user_id: str) -> str:
     auth_url, _ = flow.authorization_url(
         access_type="offline",      # リフレッシュトークンを取得するために必要
         include_granted_scopes="true",
-        prompt="consent",           # 毎回リフレッシュトークンを発行させる
+        prompt="select_account consent",           # 毎回リフレッシュトークンを発行させる
         state=discord_user_id       # コールバック時にDiscordIDを特定するために使う
     )
     return auth_url
