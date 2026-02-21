@@ -15,6 +15,7 @@ from pydantic import BaseModel
 # 自作モジュール
 import models
 import crud
+import schemas
 from database import SessionLocal, engine
 from ble_test import run_ble_server
 import ble_beacon_tx
@@ -228,6 +229,26 @@ def get_db():
 
 class PlanRequest(BaseModel):
     discord_user_id: str
+
+
+@app.post("/api/schedules/")
+def create_schedule_from_mentions(req: schemas.ScheduleCreate, db: Session = Depends(get_db)):
+    result = crud.add_schedules_for_mentions(
+        db=db,
+        mentioned_discord_ids=req.mentioned_discord_ids,
+        date_str=req.date,
+        time_str=req.time,
+        title=req.title,
+    )
+
+    return {
+        "status": "success",
+        "saved_ids": result["saved_ids"],
+        "skipped_ids": result["skipped_ids"],
+        "date": req.date,
+        "time": req.time,
+        "title": req.title,
+    }
 
 @app.websocket("/ws/windows")
 async def websocket_endpoint(websocket: WebSocket):

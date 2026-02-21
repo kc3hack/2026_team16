@@ -2,6 +2,7 @@
 from sqlalchemy.orm import Session
 import models
 import random
+from datetime import datetime
 
 # ＝＝＝ ① Discord Botが動いた時に「保存」する処理 ＝＝＝
 def upsert_user_setting(db: Session, discord_id: str, device_id: str, offset: int):
@@ -83,3 +84,48 @@ def schedule_attack(db: Session, discord_id: str):
     # 以前は offset（ズレ時間）を返していましたが、
     # 今回からは「成功したかどうかのTrue」だけを返します
     return True
+
+
+def add_schedules_for_mentions(
+    db: Session,
+    mentioned_discord_ids: list[str],
+    date_str: str,
+    time_str: str,
+    title: str,
+):
+    """
+    メンションされたDiscord IDのうち、user_settings に登録済みのユーザーだけ
+    schedules テーブルへ予定を保存する。
+    """
+    scheduled_at = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+
+    saved_ids: list[str] = []
+    skipped_ids: list[str] = []
+
+    for discord_id in mentioned_discord_ids:
+        setting = (
+            db.query(models.UserSetting)
+            .filter(models.UserSetting.discord_user_id == discord_id)
+            .first()
+        )
+
+        if not setting:
+            skipped_ids.append(discord_id)
+            continue
+
+        schedule = models.Schedule(
+            user_id=setting.id,
+            title=title,
+            scheduled_at=scheduled_at,
+        )
+        db.add(schedule)
+        saved_ids.append(discord_id)
+
+    db.commit()
+
+    return {
+        "saved_ids": saved_ids,
+        "skipped_ids": skipped_ids,
+        "scheduled_at": scheduled_at,
+        "title": title,
+    }
