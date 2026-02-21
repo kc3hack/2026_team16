@@ -88,31 +88,12 @@ def change_timezone(profile_id):
 # --- 各アクションの定義 ---
 
 def execute_shift_action():
-    """シングルクリック時：ランダムタイムリープ"""
-    print("⚡ 【シングルクリック検知】時間をランダムにずらします！")
-    multiplier = random.randint(1, 4)
-    offset = multiplier * 30
-    print(f"🎲 パターン{multiplier} -> {offset}分")
-
-    # 1. MDM
-    match multiplier:
-        case 1: change_timezone(PROFILE_GMT9_5)
-        case 2: change_timezone(PROFILE_GMT10)
-        case 3: change_timezone(PROFILE_GMT10_5)
-        case 4: change_timezone(PROFILE_GMT11)
-    
-    # 2. Windows 
-    payload = {
-        "action": "shift",
-        "direction": "forward",
-        "offset_minutes": offset
-    }
+    """シングルクリック時：全ユーザーのGoogleカレンダーを確認して攻撃"""
+    print("⚡ 【シングルクリック検知】Googleカレンダーを確認してタイムリープします！")
     if loop:
-        print(f"💻 Windows PCへ送信: {offset}分進める")
-        asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
-            
-    # 3. 物理時計
-    ble_beacon_tx.broadcast_time_burst(offset, repeat_count=3, interval_ms=100)
+        asyncio.run_coroutine_threadsafe(attack_users_with_calendar(), loop)
+    else:
+        print("⚠️ イベントループが未初期化のため攻撃をスキップしました")
 
 def execute_pairing_mode():
     """ダブルクリック時：BLEペアリングモードON"""
@@ -182,55 +163,78 @@ def on_release():
         click_timer.start()
 
 # ==========================
-# 定期実行タスク (深夜0時発動)
+# 全ユーザー攻撃共通処理
 # ==========================
-async def midnight_attack():
-    print("🕛 深夜0時です。タイムリープを開始します...")
+async def attack_users_with_calendar():
+    """
+    DBの全ユーザーのGoogleカレンダーを確認し、
+    今日予定があるユーザーにのみランダムタイムリープを適用する。
+    深夜0時 (midnight_attack) と ボタンシングルクリック (execute_shift_action) の両方から呼ばれる。
+    """
+    print("🔍 [Calendar] 全ユーザーの今日の予定を確認します...")
     db = SessionLocal()
     try:
-        settings = db.query(models.UserSetting).filter(models.UserSetting.is_attack_scheduled.is_(True)).all()
-        now = datetime.now()
-        limit = now + timedelta(hours=24)
+        all_users = db.query(models.UserSetting).all()
 
-        user_ids = [user.id for user in settings]
-        schedules_by_user_id = {}
-        if user_ids:
-            all_schedules = (
-                db.query(models.Schedule)
-                .filter(models.Schedule.user_id.in_(user_ids))
-                .filter(models.Schedule.scheduled_at >= now)
-                .filter(models.Schedule.scheduled_at <= limit)
-                .order_by(models.Schedule.user_id, models.Schedule.scheduled_at.asc())
-                .all()
-            )
-            for schedule in all_schedules:
-                if schedule.user_id not in schedules_by_user_id:
-                    schedules_by_user_id[schedule.user_id] = schedule
-        for user in settings:
-            upcoming_schedule = schedules_by_user_id.get(user.id)
-
-            if not upcoming_schedule:
-                print(f"⏭️ {user.discord_user_id} は予定がないためスキップ")
-                user.is_attack_scheduled = False  # type: ignore
+        for user in all_users:
+            # Googleカレンダー未認証ユーザーはスキップ
+            if not user.google_access_token or not user.google_refresh_token:
+                print(f"⏭️ [Skip] {user.discord_user_id} はカレンダー未認証のためスキップ")
                 continue
+
+            # 今日の予定を取得
+            try:
+                events = await asyncio.to_thread(
+                    google_calendar.get_today_events,
+                    user.google_access_token,
+                    user.google_refresh_token,
+                )
+            except Exception as e:
+                print(f"⚠️ {user.discord_user_id} のカレンダー取得失敗: {e}")
+                continue
+
+            if not events:
+                print(f"🕊️ [Skip] {user.discord_user_id} は今日予定がないためスキップ")
+                continue
+
+            # 今日の予定をターミナルに出力
+            print(f"📋 [{user.discord_user_id}] 今日の予定 {len(events)}件:")
+            for ev in events:
+                title = ev.get("summary", "（タイトルなし）")
+                start = ev.get("start", {})
+                start_time = start.get("dateTime", start.get("date", "不明"))
+                if "T" in start_time:
+                    start_time = start_time.split("T")[1][:5]  # "09:00" の形式に
+                print(f"   ・ {start_time} {title}")
+
+            # 今日予定あり → ランダムオフセット決定
             multiplier = random.randint(1, 4)
             offset = multiplier * 30
+            print(f"🎲 {user.discord_user_id}: パターン{multiplier} -> {offset}分 タイムリープ実行！")
 
+            # 1. MDM（スマホ）
             match multiplier:
                 case 1: await asyncio.to_thread(change_timezone, PROFILE_GMT9_5)
                 case 2: await asyncio.to_thread(change_timezone, PROFILE_GMT10)
                 case 3: await asyncio.to_thread(change_timezone, PROFILE_GMT10_5)
                 case 4: await asyncio.to_thread(change_timezone, PROFILE_GMT11)
-            
+
+            # 2. Windows PC (WebSocket)
             payload = {"action": "shift", "direction": "forward", "offset_minutes": offset}
             await manager.broadcast(payload)
+
+            # 3. 物理時計 (BLE)
             await asyncio.to_thread(ble_beacon_tx.broadcast_time_burst, offset, repeat_count=5)
-            
-            user.is_attack_scheduled = False  # type: ignore
-            
-        db.commit()
+
     finally:
         db.close()
+
+# ==========================
+# 定期実行タスク (深夜0時発動)
+# ==========================
+async def midnight_attack():
+    print("🕛 深夜0時です。タイムリープ（Googleカレンダー連動）を開始します...")
+    await attack_users_with_calendar()
 
 # ==========================
 # ライフスパン (起動・終了処理)
@@ -417,6 +421,7 @@ def register_gmail_endpoint(req: RegisterRequest, db: Session = Depends(get_db))
 def get_user_info(discord_user_id: str, db: Session = Depends(get_db)):
     """
     DiscordIDを元にDBの全情報を返す。
+    Googleカレンダー認証済みの場合は今日の予定も返す。
     !myinfo コマンドから呼ばれる。
     """
     user = db.query(models.UserSetting).filter(
@@ -426,6 +431,20 @@ def get_user_info(discord_user_id: str, db: Session = Depends(get_db)):
     if not user:
         return {"status": "not_found", "message": "このユーザーはDBに登録されていません。"}
 
+    # 今日のカレンダー予定を取得（認証済みの場合のみ）
+    today_events = []
+    calendar_status = "not_authorized"
+    if user.google_access_token and user.google_refresh_token:
+        try:
+            today_events = google_calendar.get_today_events(
+                access_token=user.google_access_token,
+                refresh_token=user.google_refresh_token,
+            )
+            calendar_status = "ok"
+        except Exception as e:
+            print(f"⚠️ カレンダー取得エラー ({discord_user_id}): {e}")
+            calendar_status = "error"
+
     return {
         "status": "success",
         "id": user.id,
@@ -434,6 +453,34 @@ def get_user_info(discord_user_id: str, db: Session = Depends(get_db)):
         "mdm_device_id": user.mdm_device_id,
         "offset_minutes": user.offset_minutes,
         "is_attack_scheduled": user.is_attack_scheduled,
+        "calendar_status": calendar_status,
+        "today_events": today_events,
+    }
+
+# ==========================
+# デバッグ用：全ユーザー一覧API
+# ==========================
+@app.get("/api/debug/users")
+def get_all_users(db: Session = Depends(get_db)):
+    """
+    DB内の全ユーザー情報を返す（テスト・デバッグ用）。
+    !dbdump コマンドから呼ばれる。
+    """
+    users = db.query(models.UserSetting).all()
+    return {
+        "count": len(users),
+        "users": [
+            {
+                "id": u.id,
+                "discord_user_id": u.discord_user_id,
+                "gmail": u.gmail,
+                "mdm_device_id": u.mdm_device_id,
+                "offset_minutes": u.offset_minutes,
+                "is_attack_scheduled": u.is_attack_scheduled,
+                "has_google_token": bool(u.google_access_token),
+            }
+            for u in users
+        ]
     }
 
 # ==========================

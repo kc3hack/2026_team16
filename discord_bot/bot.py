@@ -22,38 +22,45 @@ async def on_ready():
     print(f'接続先API: {API_BASE_URL}/api/plan/')
     print(f"登録コマンド: {', '.join(sorted(c.name for c in bot.commands))}")
 
-# コマンド: !plan YYYY-MM-DD HH:MM 予定名
+# コマンド: !plan @user1 @user2 YYYY-MM-DD HH:MM 予定名
 @bot.command()
-async def plan(ctx, date: str, time: str, *, task: str):
-    discord_id = str(ctx.author.id)
-    target_name = ctx.author.name
-    
+async def plan(ctx, members: commands.Greedy[discord.Member], date: str, time: str, *, task: str):
+    """
+    !plan @user1 @user2 2026-02-22 19:00 打ち上げ
+    メンションされた全員の予定を登録する。
+    メンションなしの場合はコマンドを打った本人のみ対象。
+    """
     setting_url = f"{API_BASE_URL}/api/plan/"
-    
-    # 日時・予定名もAPIに送信するよう改修
-    payload = {
-        "discord_user_id": discord_id,
-        "date": date,
-        "time": time,
-        "task": task,
-    }
-    
-    try:
-        response = await asyncio.to_thread(requests.post, setting_url, json=payload)
 
-        if response.status_code == 200:
-            data = response.json()
-            calendar_msg = "✅ Googleカレンダーにも登録しました！" if data.get("calendar_registered") else "⚠️ カレンダー未登録（!authで認証してください）"
-            await ctx.send(
-                f"✅ {target_name} さんの予定を登録しました！\n"
-                f"📅 {date} {time}\n"
-                f"📝 {task}\n"
-                f"📆 {calendar_msg}"
-            )
-        else:
-            await ctx.send(f"⚠️ サーバーとの通信に失敗しました。ステータス: {response.status_code}")
-    except Exception as e:
-        await ctx.send(f"❌ ラズパイへの接続エラー: {e}\n※ラズパイのサーバーは起動していますか？")
+    # メンションがない場合はコマンドを打った本人
+    targets = members if members else [ctx.author]
+
+    results = []
+    for member in targets:
+        discord_id = str(member.id)
+        payload = {
+            "discord_user_id": discord_id,
+            "date": date,
+            "time": time,
+            "task": task,
+        }
+        try:
+            response = await asyncio.to_thread(requests.post, setting_url, json=payload)
+            if response.status_code == 200:
+                data = response.json()
+                cal_ok = data.get("calendar_registered", False)
+                cal_msg = "✅ Googleカレンダーに登録済" if cal_ok else "⚠️ カレンダー未登録（!auth で認証してください）"
+                results.append(f"✅ **{member.display_name}** さんの予定を登録しました！\n   📆 {cal_msg}")
+            else:
+                results.append(f"⚠️ **{member.display_name}** さんの登録に失敗しました（ステータス: {response.status_code}）")
+        except Exception as e:
+            results.append(f"❌ **{member.display_name}** さんへの登録エラー: {e}")
+
+    await ctx.send(
+        f"📅 **{date} {time}　{task}**\n"
+        f"──────────────────\n"
+        + "\n".join(results)
+    )
 
 # コマンド: !auth （Googleカレンダー認証）
 @bot.command()
@@ -116,6 +123,7 @@ async def myinfo(ctx):
     """
     !myinfo
     コマンドを打った人のDBに保存されている全情報を表示する。
+    Googleカレンダー認証済みの場合は今日の予定も表示する。
     """
     discord_id = str(ctx.author.id)
     url = f"{API_BASE_URL}/api/user/{discord_id}"
@@ -130,6 +138,31 @@ async def myinfo(ctx):
                 await ctx.send("⚠️ あなたのデータはDBに登録されていません。\n`!register メールアドレス` で登録してください。")
                 return
 
+            # 今日の予定セクションを組み立て
+            cal_status = data.get("calendar_status", "not_authorized")
+            today_events = data.get("today_events", [])
+
+            if cal_status == "not_authorized":
+                calendar_section = "🔒 Googleカレンダー: `未認証（!auth で認証してください）`"
+            elif cal_status == "error":
+                calendar_section = "❌ Googleカレンダー: `取得に失敗しました`"
+            elif not today_events:
+                calendar_section = "📅 今日の予定: `なし`"
+            else:
+                lines = [f"📅 今日の予定: **{len(today_events)}件**"]
+                for event in today_events:
+                    summary = event.get("summary", "（タイトルなし）")
+                    start = event.get("start", {})
+                    # 終日予定は dateTime ではなく date
+                    start_time = start.get("dateTime", start.get("date", ""))
+                    # 時間部分だけ表示（例："2026-02-22T09:00:00+09:00" → "09:00"）
+                    if "T" in start_time:
+                        time_str = start_time.split("T")[1][:5]
+                        lines.append(f"  ・ `{time_str}` {summary}")
+                    else:
+                        lines.append(f"  ・ 終日 {summary}")
+                calendar_section = "\n".join(lines)
+
             await ctx.send(
                 f"📋 **あなたのDB情報（テスト用）**\n"
                 f"──────────────────\n"
@@ -139,10 +172,45 @@ async def myinfo(ctx):
                 f"📱 MDMデバイスID: `{data['mdm_device_id'] or '未登録'}`\n"
                 f"⏰ ズレ時間: `{data['offset_minutes']}分`\n"
                 f"🎯 攻撃予約フラグ: `{data['is_attack_scheduled']}`\n"
-                f"──────────────────"
+                f"──────────────────\n"
+                f"{calendar_section}"
             )
         else:
             await ctx.send(f"⚠️ 情報の取得に失敗しました。ステータス: {response.status_code}")
+    except Exception as e:
+        await ctx.send(f"❌ サーバーへの接続エラー: {e}\n※サーバーは起動していますか？")
+
+
+# コマンド: !dbdump （デバッグ用：DB全ユーザー一覧）
+@bot.command()
+async def dbdump(ctx):
+    """
+    !dbdump
+    DBに登録されている全ユーザーの情報を表示する（テスト・デバッグ用）。
+    """
+    url = f"{API_BASE_URL}/api/debug/users"
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            data = response.json()
+            users = data.get("users", [])
+            count = data.get("count", 0)
+
+            if count == 0:
+                await ctx.send("📭 DBにユーザーが登録されていません。")
+                return
+
+            lines = [f"🗄️ **DB全ユーザー一覧（{count}人）**\n──────────────────"]
+            for u in users:
+                cal_icon = "✅" if u["has_google_token"] else "❌"
+                attack_icon = "🎯" if u["is_attack_scheduled"] else "⬜"
+                lines.append(
+                    f"**ID:{u['id']}** `{u['discord_user_id']}`\n"
+                    f"  {cal_icon} Calendar　{attack_icon} Attack予約　⏰ {u['offset_minutes']}分ズレ"
+                )
+            await ctx.send("\n".join(lines))
+        else:
+            await ctx.send(f"⚠️ 取得失敗。ステータス: {response.status_code}")
     except Exception as e:
         await ctx.send(f"❌ サーバーへの接続エラー: {e}\n※サーバーは起動していますか？")
 
