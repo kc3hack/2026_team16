@@ -10,7 +10,8 @@ RUN pip install --no-cache-dir fastapi[standard] uvicorn requests
 RUN apt-get update && apt-get install -y network-manager
 RUN apt-get update && apt-get install -y \
     bluez \
-    bluetooth
+    bluetooth \
+    network-manager
 
 # 全ファイルをコピー
 COPY . .
