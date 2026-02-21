@@ -70,15 +70,15 @@ def schedule_attack(db: Session, discord_id: str):
         return False
     
     if user_setting:
-    # 既にユーザーがいれば、攻撃予定フラグをONにする
-    user_setting.is_attack_scheduled = True # type: ignore
+        # 既にユーザーがいれば、攻撃予定フラグをONにする
+        user_setting.is_attack_scheduled = True # type: ignore
+            
+        db.commit()
+        db.refresh(user_setting)
         
-    db.commit()
-    db.refresh(user_setting)
-    
-    # 以前は offset（ズレ時間）を返していましたが、
-    # 今回からは「成功したかどうかのTrue」だけを返します
-    return True
+        # 以前は offset（ズレ時間）を返していましたが、
+        # 今回からは「成功したかどうかのTrue」だけを返します
+        return True
 
 
 def add_schedules_for_mentions(
