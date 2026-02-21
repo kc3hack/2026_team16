@@ -14,9 +14,9 @@ from fastapi.responses import FileResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
-from gpiozero import Button
 from pydantic import BaseModel
-from fastapi.responses import FileResponse
+
+import RPi.GPIO as GPIO 
 
 # 自作モジュール
 import models
@@ -63,20 +63,6 @@ class ConnectionManager:
 manager = ConnectionManager()
 loop = None
 
-# ==========================
-# GPIO ボタン設定 (マルチクリック判定)
-# ==========================
-BUTTON_PIN = 17
-button = None
-press_start_time = 0
-click_count = 0
-click_timer = None
-
-def on_press():
-    global press_start_time
-    press_start_time = time.time()
-    print("🔘 [Button] 押されました...")
-
 def change_timezone(profile_id):
     mdm_client = MDMClient()
     ok = mdm_client.change_timezone(profile_id)
@@ -88,72 +74,57 @@ def change_timezone(profile_id):
 # --- 各アクションの定義 ---
 
 def execute_shift_action():
-    """シングルクリック時：ランダムタイムリープ"""
     print("⚡ 【シングルクリック検知】時間をランダムにずらします！")
     multiplier = random.randint(1, 4)
     offset = multiplier * 30
     print(f"🎲 パターン{multiplier} -> {offset}分")
 
-    # 1. MDM
     match multiplier:
         case 1: change_timezone(PROFILE_GMT9_5)
         case 2: change_timezone(PROFILE_GMT10)
         case 3: change_timezone(PROFILE_GMT10_5)
         case 4: change_timezone(PROFILE_GMT11)
     
-    # 2. Windows 
-    payload = {
-        "action": "shift",
-        "direction": "forward",
-        "offset_minutes": offset
-    }
+    payload = {"action": "shift", "direction": "forward", "offset_minutes": offset}
     if loop:
         print(f"💻 Windows PCへ送信: {offset}分進める")
         asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
             
-    # 3. 物理時計
     ble_beacon_tx.broadcast_time_burst(offset, repeat_count=3, interval_ms=100)
 
 def execute_pairing_mode():
-    """ダブルクリック時：BLEペアリングモードON"""
     print("\n🔗 【ダブルクリック検知】ペアリングモードを起動します！")
     ble_test.pairing_mode_active = True  # type: ignore
     print("🔵 3分間、WebからのWi-Fi設定を受付開始します...")
 
-    # 3分後に自動で閉じるタイマー
     def disable_mode():
         if ble_test.pairing_mode_active:  # type: ignore
             ble_test.pairing_mode_active = False  # type: ignore
             print("⏳ タイムアップ: ペアリングモードを終了しました。")
-    
     threading.Timer(180.0, disable_mode).start()
 
 def execute_restore_action():
-    """長押し時：復旧"""
     print("\n🛡️ 【長押し検知】時間を元に戻す(復旧)命令を送信します！")
-    
-    # 1. MDM復旧
     if PROFILE_TOKYO:
         success = change_timezone(PROFILE_TOKYO)
         if success:
             print("✅ MDM復旧命令の送信に成功しました")
-    else:
-        print("❌ エラー: PROFILE_TOKYO が設定されていません。")
-
-    # 2. Windows PC
-    payload = {
-        "action": "restore",
-        "direction": "none",
-        "offset_minutes": 0
-    }
+    
+    payload = {"action": "restore", "direction": "none", "offset_minutes": 0}
     if loop:
         print("💻 Windows PCへ送信: 時間を元に戻す")
         asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
         
-    # 3. 物理時計
     ble_beacon_tx.broadcast_time_burst(0, repeat_count=3, interval_ms=100)
 
-# --- 判定ロジック ---
+# ==========================
+# GPIO: ボタンとセンサー (RPi.GPIO版)
+# ==========================
+BUTTON_PIN = 17  # 物理ピン 11番
+SENSOR_PIN = 12  # 物理ピン 32番
+
+click_count = 0
+click_timer = None
 
 def evaluate_clicks():
     global click_count
@@ -163,23 +134,57 @@ def evaluate_clicks():
         execute_pairing_mode()
     click_count = 0
 
-def on_release():
-    global press_start_time, click_count, click_timer
-    press_duration = time.time() - press_start_time
-    print(f"🔘 [Button] 離されました ({press_duration:.2f}s)")
+async def poll_button():
+    """バックグラウンドでボタンを100%確実に監視するタスク"""
+    global click_count, click_timer
+    
+    last_state = GPIO.HIGH
+    press_start_time = 0
 
-    if press_duration >= 4.0:
-        click_count = 0
-        if click_timer:
-            click_timer.cancel()
-        execute_restore_action()
-    else:
-        click_count += 1
-        if click_timer:
-            click_timer.cancel()
-        
-        click_timer = threading.Timer(0.4, evaluate_clicks)
-        click_timer.start()
+    while True:
+        try:
+            state = GPIO.input(BUTTON_PIN)
+            
+            if state != last_state:  # 状態が変化した！
+                if state == GPIO.LOW:  # 押された
+                    press_start_time = time.time()
+                    print("🔘 [Button] 押されました...")
+                else:  # 離された
+                    if press_start_time != 0:
+                        press_duration = time.time() - press_start_time
+                        print(f"🔘 [Button] 離されました ({press_duration:.2f}s)")
+
+                        if press_duration >= 4.0:
+                            click_count = 0
+                            if click_timer: click_timer.cancel()
+                            execute_restore_action()
+                        else:
+                            click_count += 1
+                            if click_timer: click_timer.cancel()
+                            click_timer = threading.Timer(0.4, evaluate_clicks)
+                            click_timer.start()
+                        press_start_time = 0
+                last_state = state
+
+        except Exception as e:
+            print(f"⚠️ ボタン監視エラー: {e}")
+            
+        await asyncio.sleep(0.05)  # 50ミリ秒ごとにチェック（チャタリング防止＆負荷軽減）
+
+def read_sensor_state() -> dict:
+    """センサーの現在の明暗状態を返すヘルパー"""
+    try:
+        val = GPIO.input(SENSOR_PIN)
+        is_dark = (val == GPIO.HIGH) # HIGH=1=暗い, LOW=0=明るい
+        return {
+            "status": "ok",
+            "gpio_pin": SENSOR_PIN,
+            "physical_pin": 32,
+            "state": "DARK" if is_dark else "BRIGHT",
+            "raw": val,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 # ==========================
 # 定期実行タスク (深夜0時発動)
@@ -208,9 +213,7 @@ async def midnight_attack():
                     schedules_by_user_id[schedule.user_id] = schedule
         for user in settings:
             upcoming_schedule = schedules_by_user_id.get(user.id)
-
             if not upcoming_schedule:
-                print(f"⏭️ {user.discord_user_id} は予定がないためスキップ")
                 user.is_attack_scheduled = False  # type: ignore
                 continue
             multiplier = random.randint(1, 4)
@@ -225,9 +228,7 @@ async def midnight_attack():
             payload = {"action": "shift", "direction": "forward", "offset_minutes": offset}
             await manager.broadcast(payload)
             await asyncio.to_thread(ble_beacon_tx.broadcast_time_burst, offset, repeat_count=5)
-            
             user.is_attack_scheduled = False  # type: ignore
-            
         db.commit()
     finally:
         db.close()
@@ -240,28 +241,35 @@ async def lifespan(app: FastAPI):
     global loop
     loop = asyncio.get_running_loop()
     
-    # スケジューラー起動（タイムゾーンを明示指定。Windowsのシステムタイムゾーンが書き換えられても動くように）
+    # --- RPi.GPIO の初期設定 ---
+    GPIO.setwarnings(False)
+    GPIO.setmode(GPIO.BCM)
+    
+    # ボタン (プルアップ抵抗をONにして待機)
+    GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    print(f"✅ Button : GPIO{BUTTON_PIN} (物理ピン11番) ready.")
+    
+    # センサー
+    GPIO.setup(SENSOR_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+    sensor_status = read_sensor_state()
+    print(f"✅ Sensor : GPIO{SENSOR_PIN} (物理ピン32番) ready. 現在: {sensor_status.get('state')}")
+
+    # ボタン監視用のバックグラウンドタスクを起動
+    asyncio.create_task(poll_button())
+
     scheduler = AsyncIOScheduler(timezone="Asia/Tokyo")
-    scheduler.add_job(midnight_attack, 'cron', minute='*') # テスト用（本番は hour=0, minute=0）
+    scheduler.add_job(midnight_attack, 'cron', minute='*')
     scheduler.start()
     print("⏰ スケジューラーが起動しました")
 
     print("📡 BLEプロビジョニングサーバーを起動中...")
     ble_task = asyncio.create_task(run_ble_server())
-    
-    global button
-    try:
-        button = Button(BUTTON_PIN, pull_up=True, bounce_time=0.05)
-        button.when_pressed = on_press
-        button.when_released = on_release
-        print(f"✅ GPIO {BUTTON_PIN} is ready.")
-    except Exception as e:
-        print(f"⚠️ GPIO Init Error: {e}")
 
     yield
     
-    print("🛑 サーバー停止中。")
+    print("🛑 サーバー停止中。GPIOをクリーンアップします...")
     ble_task.cancel()
+    GPIO.cleanup()
 
 # ==========================
 # FastAPI アプリ定義
@@ -279,9 +287,9 @@ from typing import Optional
 
 class PlanRequest(BaseModel):
     discord_user_id: str
-    date: Optional[str] = None   # 予定日付 "YYYY-MM-DD"
-    time: Optional[str] = None   # 予定時刻 "HH:MM"
-    task: Optional[str] = None   # 予定名
+    date: Optional[str] = None
+    time: Optional[str] = None
+    task: Optional[str] = None
 
 @app.post("/api/schedules/")
 def create_schedule_from_mentions(req: schemas.ScheduleCreate, db: Session = Depends(get_db)):
@@ -309,24 +317,14 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.post("/api/plan/")
 def register_plan(plan: PlanRequest, db: Session = Depends(get_db)):
     crud.schedule_attack(db, plan.discord_user_id)
-    
-    user = db.query(models.UserSetting).filter(
-        models.UserSetting.discord_user_id == plan.discord_user_id
-    ).first()
+    user = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == plan.discord_user_id).first()
 
     if not user:
-        print(f"⚠️ エラー: Discord ID '{plan.discord_user_id}' は未登録です。")
         return {"status": "error", "message": "ユーザーが未登録です。先に設定画面から登録してください。"}
 
     calendar_registered = False
     
-    # 🌟 修正1: 「is not None」を使ってエディタの __bool__ パニックを回避
-    if (user.google_access_token is not None and 
-        user.google_refresh_token is not None and 
-        plan.date is not None and 
-        plan.time is not None and 
-        plan.task is not None):
-        
+    if (user.google_access_token is not None and user.google_refresh_token is not None and plan.date is not None and plan.time is not None and plan.task is not None):
         try:
             google_calendar.add_event_to_calendar(
                 access_token=str(user.google_access_token),    # type: ignore
@@ -348,34 +346,17 @@ def register_plan(plan: PlanRequest, db: Session = Depends(get_db)):
         "calendar_registered": calendar_registered,
     }
 
-# ==========================
-# Google OAuth2 認証
-# ==========================
 @app.get("/auth/google")
 def google_auth(discord_user_id: str):
-    """
-    !auth コマンドから呼ばれる。
-    このURLをユーザーにDMで送る。
-    """
     auth_url = google_calendar.get_auth_url(discord_user_id)
     return {"auth_url": auth_url}
 
 @app.get("/auth/callback")
 def google_callback(code: str, state: str, db: Session = Depends(get_db)):
-    """
-    Googleがリダイレクトするエンドポイント。
-    コードをトークンに交換してDBに保存する。
-    stateにDiscordIDが入っている。
-    """
     discord_user_id = state
-
-    # 認証コードをトークンに交換
     tokens = google_calendar.exchange_code_for_tokens(code)
 
-    # DBにトークンを保存
-    user = db.query(models.UserSetting).filter(
-        models.UserSetting.discord_user_id == discord_user_id
-    ).first()
+    user = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == discord_user_id).first()
     if user:
         user.google_access_token = tokens["access_token"]   # type: ignore
         user.google_refresh_token = tokens["refresh_token"]  # type: ignore
@@ -388,9 +369,7 @@ def google_callback(code: str, state: str, db: Session = Depends(get_db)):
         db.add(user)
     db.commit()
     print(f"✅ [Google認証完了] DiscordID: {discord_user_id} のトークンを保存しました")
-
-    # ブラウザに表示する完了メッセージ
-    return {"認証完了": "✅ Googleカレンダーへのアクセスが許可されました！Discordに戻って!planを試してみてください。"}
+    return {"認証完了": "✅ Googleカレンダーへのアクセスが許可されました！"}
 
 class RegisterRequest(BaseModel):
     discord_user_id: str
@@ -398,34 +377,14 @@ class RegisterRequest(BaseModel):
 
 @app.post("/api/register/")
 def register_gmail_endpoint(req: RegisterRequest, db: Session = Depends(get_db)):
-    """
-    DiscordIDとGmailを紐付けてDBに保存する。
-    !register コマンドから呼ばれる。
-    """
     user = crud.register_gmail(db, req.discord_user_id, req.gmail)
-    print(f"📧 [Gmail登録] DiscordID: {req.discord_user_id} → {req.gmail}")
-    return {
-        "status": "success",
-        "discord_user_id": user.discord_user_id,
-        "gmail": user.gmail
-    }
+    return {"status": "success", "discord_user_id": user.discord_user_id, "gmail": user.gmail}
 
-# ==========================
-# ユーザー情報取得API（テスト用）
-# ==========================
 @app.get("/api/user/{discord_user_id}")
 def get_user_info(discord_user_id: str, db: Session = Depends(get_db)):
-    """
-    DiscordIDを元にDBの全情報を返す。
-    !myinfo コマンドから呼ばれる。
-    """
-    user = db.query(models.UserSetting).filter(
-        models.UserSetting.discord_user_id == discord_user_id
-    ).first()
-
+    user = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == discord_user_id).first()
     if not user:
         return {"status": "not_found", "message": "このユーザーはDBに登録されていません。"}
-
     return {
         "status": "success",
         "id": user.id,
@@ -436,24 +395,15 @@ def get_user_info(discord_user_id: str, db: Session = Depends(get_db)):
         "is_attack_scheduled": user.is_attack_scheduled,
     }
 
-# ==========================
-# Googleカレンダー予定取得API
-# ==========================
 @app.get("/api/schedule/{discord_user_id}")
 def get_schedule(discord_user_id: str, db: Session = Depends(get_db)):
-    user = db.query(models.UserSetting).filter(
-        models.UserSetting.discord_user_id == discord_user_id
-    ).first()
-
+    user = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == discord_user_id).first()
     if not user:
-        return {"status": "not_found", "message": "DBに登録されていません。!auth で認証してください。"}
-
-    # 🌟 修正ポイント: 「is None」を使うことでエディタのパニックを回避
+        return {"status": "not_found", "message": "DBに登録されていません。"}
     if user.google_access_token is None or user.google_refresh_token is None:
-        return {"status": "not_authorized", "message": "Googleカレンダーの認証が完了していません。!auth で認証してください。"}
+        return {"status": "not_authorized", "message": "Googleカレンダーの認証が完了していません。"}
 
     try:
-        # 🌟 修正ポイント: str()で囲み、さらに # type: ignore で強制突破
         events = google_calendar.get_upcoming_events(
             access_token=str(user.google_access_token),    # type: ignore
             refresh_token=str(user.google_refresh_token),  # type: ignore
@@ -461,22 +411,19 @@ def get_schedule(discord_user_id: str, db: Session = Depends(get_db)):
         )
         return {"status": "success", "events": events}
     except Exception as e:
-        print(f"⚠️ カレンダー取得エラー: {e}")
         return {"status": "error", "message": str(e)}
 
-if __name__ == "__main__":
+@app.get("/api/sensor/status")
+def get_sensor_status():
+    """LM393センサーの現在の明暗状態を返す"""
+    return read_sensor_state()
 
-    uvicorn.run(app, host="127.0.0.1", port=8000)
-    
 @app.get("/api/wifi/ssids")
 def get_wifi_ssids():
     try:
         result = subprocess.run(
             ["nmcli", "-t", "-f", "SSID", "dev", "wifi", "list", "--rescan", "yes"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
+            capture_output=True, text=True, timeout=10, check=False,
         )
         if result.returncode != 0:
             raise HTTPException(status_code=500, detail=result.stderr.strip() or "nmcli failed")
@@ -488,19 +435,17 @@ def get_wifi_ssids():
             if s and s not in seen:
                 seen.add(s)
                 ssids.append(s)
-
         return {"ssids": ssids}
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="wifi scan timeout")
 
 @app.get("/setup")
 def setup_page():
-    # 🌟 魔法のパス指定：main.py自身の場所を基準に setup.html を探す
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(BASE_DIR, "setup.html")
-    
     if not os.path.exists(file_path):
         return {"error": f"ファイルが見つかりません: {file_path}"}
-        
     return FileResponse(file_path)
-    
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
