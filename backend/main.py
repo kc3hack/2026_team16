@@ -186,8 +186,8 @@ async def lifespan(app: FastAPI):
     global loop
     loop = asyncio.get_running_loop()
     
-    # スケジューラー起動
-    scheduler = AsyncIOScheduler()
+    # スケジューラー起動（タイムゾーンを明示指定。Windowsのシステムタイムゾーンが書き換えられても動くように）
+    scheduler = AsyncIOScheduler(timezone="Asia/Tokyo")
     scheduler.add_job(midnight_attack, 'cron', minute='*') # テスト用（本番は hour=0, minute=0）
     scheduler.start()
     print("⏰ スケジューラーが起動しました")
