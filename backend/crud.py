@@ -122,10 +122,37 @@ def add_schedules_for_mentions(
         saved_ids.append(discord_id)
 
     db.commit()
-
+    
     return {
         "saved_ids": saved_ids,
         "skipped_ids": skipped_ids,
         "scheduled_at": scheduled_at,
         "title": title,
     }
+
+# ＝＝＝ ④ DiscordIDにGmailを紐付ける処理 ＝＝＝
+def register_gmail(db: Session, discord_id: str, gmail: str):
+    """
+    DiscordIDに対してGmailアドレスを登録する。
+    既存ユーザーならGmailを更新し、新規なら枠を作って登録する。
+    """
+    setting = db.query(models.UserSetting).filter(
+        models.UserSetting.discord_user_id == discord_id
+    ).first()
+
+    if setting:
+        # 既にいれば Gmail だけ上書き更新
+        setting.gmail = gmail  # type: ignore
+        print(f"📧 ユーザー '{discord_id}' のGmailを更新しました: {gmail}")
+    else:
+        # いなければ新規作成
+        setting = models.UserSetting(
+            discord_user_id=discord_id,
+            gmail=gmail
+        )
+        db.add(setting)
+        print(f"✨ 新規ユーザー '{discord_id}' をGmail '{gmail}' で登録しました！")
+
+    db.commit()
+    db.refresh(setting)
+    return setting
