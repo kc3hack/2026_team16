@@ -88,6 +88,15 @@
                     <span
                         class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 cursor-pointer hover:text-white transition-colors">visibility_off</span>
                 </div>
+                <div class="relative">
+                    <span
+                        class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">smartphone</span>
+                    <input id="mdm_device_id"
+                        class="w-full bg-transparent border-2 border-gray-600 rounded-xl py-4 pl-12 pr-4 text-white placeholder-gray-500 focus:outline-none focus:border-primary focus:ring-0 transition-colors"
+                        placeholder="MDM Device ID（数字のみ）" type="text"
+                        inputmode="numeric" pattern="[0-9]*"
+                        oninput="this.value=this.value.replace(/[^0-9]/g,'')"/>
+                </div>
             </div>
             <button id="send_button"
                 class="w-full bg-primary hover:bg-red-700 text-white font-bold py-4 rounded-xl mt-10 transition-all active:scale-[0.98]">
@@ -104,12 +113,19 @@
             const discordId = document.getElementById('discord_id').value;
             const ssid = document.getElementById('ssid').value;
             const password = document.getElementById('password').value;
+            const mdmDeviceId = document.getElementById('mdm_device_id').value.replace(/\D/g, '');
+
+            if (!mdmDeviceId) {
+                alert("MDM Device ID は数字で入力してください。");
+                return;
+            }
 
             // Web側の送信イメージ（Webチームへの共有用）
             const data = {
                 ssid: ssid,
                 password: password,
-                discord_id: discordId
+                discord_id: discordId,
+                mdm_device_id: mdmDeviceId
             };
 
             // JSON文字列にして送信
