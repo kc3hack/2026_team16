@@ -1,3 +1,4 @@
+import traceback
 import asyncio
 import logging
 import json
@@ -107,6 +108,7 @@ async def run_ble_server():
         
     except Exception as e:
         print(f"❌ エラーが発生しました: {e}")
+        traceback.print_exc()
     finally:
         try:
             await server.stop()
