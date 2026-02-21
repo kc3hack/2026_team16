@@ -5,8 +5,11 @@ import threading
 import asyncio
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
+import ble_test
 import subprocess
 from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
@@ -60,16 +63,18 @@ manager = ConnectionManager()
 loop = None
 
 # ==========================
-# GPIO ボタン設定
+# GPIO ボタン設定 (マルチクリック判定)
 # ==========================
 BUTTON_PIN = 17
 button = None
 press_start_time = 0
+click_count = 0
+click_timer = None
 
 def on_press():
     global press_start_time
     press_start_time = time.time()
-    print("🔘 [Button] 押されました。時間計測スタート...")
+    print("🔘 [Button] 押されました...")
 
 def change_timezone(profile_id):
     mdm_client = MDMClient()
@@ -79,56 +84,101 @@ def change_timezone(profile_id):
         return False
     return True
 
-def execute_button_action(press_duration):
-    if press_duration <= 3.0:
-        print("⚡ 【短押し検知】ランダムに時間をずらす命令を送信します！")
-        
-        multiplier = random.randint(1, 4)
-        offset = multiplier * 30
-        print(f"🎲 ランダム決定: パターン{multiplier} -> {offset}分 ずらします")
+# --- 各アクションの定義 ---
 
-        # 1. MDM（スマホ）
-        match multiplier:
-            case 1:
-                change_timezone(PROFILE_GMT9_5)
-            case 2:
-                change_timezone(PROFILE_GMT10)
-            case 3:
-                change_timezone(PROFILE_GMT10_5)
-            case 4:
-                change_timezone(PROFILE_GMT11)
-            case _:
-                print("⚠️ ランダム決定に失敗しました。MDMは変更しません。")
-        
-        # 2. Windows PC (WebSocket)
-        payload = {"action": "shift", "offset_minutes": offset}
-        if loop:
-            asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
+def execute_shift_action():
+    """シングルクリック時：ランダムタイムリープ"""
+    print("⚡ 【シングルクリック検知】時間をランダムにずらします！")
+    multiplier = random.randint(1, 4)
+    offset = multiplier * 30
+    print(f"🎲 パターン{multiplier} -> {offset}分")
+
+    # 1. MDM
+    match multiplier:
+        case 1: change_timezone(PROFILE_GMT9_5)
+        case 2: change_timezone(PROFILE_GMT10)
+        case 3: change_timezone(PROFILE_GMT10_5)
+        case 4: change_timezone(PROFILE_GMT11)
+    
+    # 2. Windows 
+    payload = {
+        "action": "shift",
+        "direction": "forward",
+        "offset_minutes": offset
+    }
+    if loop:
+        print(f"💻 Windows PCへ送信: {offset}分進める")
+        asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
             
-        # 3. 物理時計 (BLE)
-        print(f"📡 物理時計へ {offset}分 のタイムリープ電波を発信します...")
-        ble_beacon_tx.broadcast_time_burst(offset, repeat_count=3, interval_ms=100)
-        
+    # 3. 物理時計
+    ble_beacon_tx.broadcast_time_burst(offset, repeat_count=3, interval_ms=100)
+
+def execute_pairing_mode():
+    """ダブルクリック時：BLEペアリングモードON"""
+    print("\n🔗 【ダブルクリック検知】ペアリングモードを起動します！")
+    ble_test.pairing_mode_active = True  # type: ignore
+    print("🔵 3分間、WebからのWi-Fi設定を受付開始します...")
+
+    # 3分後に自動で閉じるタイマー
+    def disable_mode():
+        if ble_test.pairing_mode_active:  # type: ignore
+            ble_test.pairing_mode_active = False  # type: ignore
+            print("⏳ タイムアップ: ペアリングモードを終了しました。")
+    
+    threading.Timer(180.0, disable_mode).start()
+
+def execute_restore_action():
+    """長押し時：復旧"""
+    print("\n🛡️ 【長押し検知】時間を元に戻す(復旧)命令を送信します！")
+    
+    # 1. MDM復旧
+    if PROFILE_TOKYO:
+        success = change_timezone(PROFILE_TOKYO)
+        if success:
+            print("✅ MDM復旧命令の送信に成功しました")
     else:
-        print("🛡️ 【長押し検知】時間を元に戻す(復旧)命令を送信します！")
+        print("❌ エラー: PROFILE_TOKYO が設定されていません。")
+
+    # 2. Windows PC
+    payload = {
+        "action": "restore",
+        "direction": "none",
+        "offset_minutes": 0
+    }
+    if loop:
+        print("💻 Windows PCへ送信: 時間を元に戻す")
+        asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
         
-        # 1. MDM（スマホ）
-        change_timezone(PROFILE_TOKYO)
+    # 3. 物理時計
+    ble_beacon_tx.broadcast_time_burst(0, repeat_count=3, interval_ms=100)
 
-        # 2. Windows PC (WebSocket)
-        payload = {"action": "restore"}
-        if loop:
-            asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
+# --- 判定ロジック ---
 
-        # 3. 物理時計 (BLE)
-        print("📡 物理時計へ復旧電波を発信します...")
-        ble_beacon_tx.broadcast_time_burst(0, repeat_count=3, interval_ms=100)
+def evaluate_clicks():
+    global click_count
+    if click_count == 1:
+        execute_shift_action()
+    elif click_count >= 2:
+        execute_pairing_mode()
+    click_count = 0
 
 def on_release():
-    global press_start_time
+    global press_start_time, click_count, click_timer
     press_duration = time.time() - press_start_time
-    print(f"🔘 [Button] 離されました。押下時間: {press_duration:.2f}秒")
-    threading.Thread(target=execute_button_action, args=(press_duration,)).start()
+    print(f"🔘 [Button] 離されました ({press_duration:.2f}s)")
+
+    if press_duration >= 4.0:
+        click_count = 0
+        if click_timer:
+            click_timer.cancel()
+        execute_restore_action()
+    else:
+        click_count += 1
+        if click_timer:
+            click_timer.cancel()
+        
+        click_timer = threading.Timer(0.4, evaluate_clicks)
+        click_timer.start()
 
 # ==========================
 # 定期実行タスク (深夜0時発動)
@@ -141,7 +191,6 @@ async def midnight_attack():
         now = datetime.now()
         limit = now + timedelta(hours=24)
 
-        # 事前に全ユーザー分の24時間以内の最も早い予定をまとめて取得しておく（N+1クエリ回避）
         user_ids = [user.id for user in settings]
         schedules_by_user_id = {}
         if user_ids:
@@ -154,52 +203,29 @@ async def midnight_attack():
                 .all()
             )
             for schedule in all_schedules:
-                # user_id, scheduled_at の順でソート済みなので、最初の一件がそのユーザーの最も早い予定
                 if schedule.user_id not in schedules_by_user_id:
                     schedules_by_user_id[schedule.user_id] = schedule
         for user in settings:
             upcoming_schedule = schedules_by_user_id.get(user.id)
 
             if not upcoming_schedule:
-                print(f"⏭️ {user.discord_user_id} は24時間以内に予定がないためスキップします")
+                print(f"⏭️ {user.discord_user_id} は予定がないためスキップ")
                 user.is_attack_scheduled = False  # type: ignore
                 continue
             multiplier = random.randint(1, 4)
             offset = multiplier * 30
-            print(f"🎲 {user.discord_user_id} のランダム決定: パターン{multiplier} -> {offset}分")
 
-            # 1. MDM（スマホ）
             match multiplier:
-                case 1:
-                    await asyncio.to_thread(change_timezone, PROFILE_GMT9_5)
-                case 2:
-                    await asyncio.to_thread(change_timezone, PROFILE_GMT10)
-                case 3:
-                    await asyncio.to_thread(change_timezone, PROFILE_GMT10_5)
-                case 4:
-                    await asyncio.to_thread(change_timezone, PROFILE_GMT11)
-                case _:
-                    print("⚠️ ランダム決定に失敗しました。MDMは変更しません。")
+                case 1: await asyncio.to_thread(change_timezone, PROFILE_GMT9_5)
+                case 2: await asyncio.to_thread(change_timezone, PROFILE_GMT10)
+                case 3: await asyncio.to_thread(change_timezone, PROFILE_GMT10_5)
+                case 4: await asyncio.to_thread(change_timezone, PROFILE_GMT11)
             
-            # 2. Windows PC (WebSocket)
-            payload = {
-                "action": "shift",
-                "direction": "forward", 
-                "offset_minutes": offset
-            }
+            payload = {"action": "shift", "direction": "forward", "offset_minutes": offset}
             await manager.broadcast(payload)
-            print(f"🚀 Windows時間を {offset}分 進めました")
+            await asyncio.to_thread(ble_beacon_tx.broadcast_time_burst, offset, repeat_count=5)
             
-            # 3. 物理時計 (BLE)
-            print(f"📡 物理時計へ {offset}分 のタイムリープ電波を発信します...")
-            await asyncio.to_thread(
-                ble_beacon_tx.broadcast_time_burst,
-                offset,
-                repeat_count=5
-            )
-            
-            # 攻撃フラグをリセット
-            user.is_attack_scheduled = False # type: ignore
+            user.is_attack_scheduled = False  # type: ignore
             
         db.commit()
     finally:
@@ -219,11 +245,9 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     print("⏰ スケジューラーが起動しました")
 
-    # BLEサーバー起動
     print("📡 BLEプロビジョニングサーバーを起動中...")
     ble_task = asyncio.create_task(run_ble_server())
     
-    # GPIO初期化
     global button
     try:
         button = Button(BUTTON_PIN, pull_up=True, bounce_time=0.05)
@@ -235,17 +259,18 @@ async def lifespan(app: FastAPI):
 
     yield
     
-    print("🛑 サーバー停止中。BLEサーバーを終了します...")
+    print("🛑 サーバー停止中。")
     ble_task.cancel()
-    try:
-        await ble_task
-    except asyncio.CancelledError:
-        print("✅ BLEサーバーを正常に停止しました。")
 
 # ==========================
 # FastAPI アプリ定義
 # ==========================
 app = FastAPI(lifespan=lifespan)
+
+@app.get("/setup")
+def get_setup_page():
+    # 🌟 ファイル名を setup.html に変更しました！
+    return FileResponse("static/setup.html")
 
 def get_db():
     db = SessionLocal()
@@ -262,7 +287,6 @@ class PlanRequest(BaseModel):
     time: Optional[str] = None   # 予定時刻 "HH:MM"
     task: Optional[str] = None   # 予定名
 
-
 @app.post("/api/schedules/")
 def create_schedule_from_mentions(req: schemas.ScheduleCreate, db: Session = Depends(get_db)):
     result = crud.add_schedules_for_mentions(
@@ -272,31 +296,19 @@ def create_schedule_from_mentions(req: schemas.ScheduleCreate, db: Session = Dep
         time_str=req.time,
         title=req.title,
     )
-
-    # 🌟 🆕 予定が保存されたユーザー（saved_ids）全員の「攻撃フラグ」をONにする！
     for discord_id in result["saved_ids"]:
         crud.schedule_attack(db, discord_id)
-        print(f"🎯 [予約完了] DiscordID: {discord_id} の攻撃フラグをONにしました！")
-
-    return {
-        "status": "success",
-        "saved_ids": result["saved_ids"],
-        "skipped_ids": result["skipped_ids"],
-        "date": req.date,
-        "time": req.time,
-        "title": req.title,
-    }
+        print(f"🎯 [予約完了] DiscordID: {discord_id} 攻撃フラグON")
+    return {"status": "success", "saved_ids": result["saved_ids"]}
 
 @app.websocket("/ws/windows")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
-    print("💻 [WebSocket] Windows PCが接続しました！")
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-        print("🔌 [WebSocket] Windows PCが切断されました")
 
 @app.post("/api/plan/")
 def register_plan(plan: PlanRequest, db: Session = Depends(get_db)):
