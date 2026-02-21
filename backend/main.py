@@ -4,6 +4,7 @@ import time
 import threading
 import asyncio
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
 
 from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -15,6 +16,7 @@ from pydantic import BaseModel
 # 自作モジュール
 import models
 import crud
+import schemas
 from database import SessionLocal, engine
 from ble_test import run_ble_server
 import ble_beacon_tx
@@ -134,8 +136,32 @@ async def midnight_attack():
     db = SessionLocal()
     try:
         settings = db.query(models.UserSetting).filter(models.UserSetting.is_attack_scheduled.is_(True)).all()
-        
+        now = datetime.now()
+        limit = now + timedelta(hours=24)
+
+        # 事前に全ユーザー分の24時間以内の最も早い予定をまとめて取得しておく（N+1クエリ回避）
+        user_ids = [user.id for user in settings]
+        schedules_by_user_id = {}
+        if user_ids:
+            all_schedules = (
+                db.query(models.Schedule)
+                .filter(models.Schedule.user_id.in_(user_ids))
+                .filter(models.Schedule.scheduled_at >= now)
+                .filter(models.Schedule.scheduled_at <= limit)
+                .order_by(models.Schedule.user_id, models.Schedule.scheduled_at.asc())
+                .all()
+            )
+            for schedule in all_schedules:
+                # user_id, scheduled_at の順でソート済みなので、最初の一件がそのユーザーの最も早い予定
+                if schedule.user_id not in schedules_by_user_id:
+                    schedules_by_user_id[schedule.user_id] = schedule
         for user in settings:
+            upcoming_schedule = schedules_by_user_id.get(user.id)
+
+            if not upcoming_schedule:
+                print(f"⏭️ {user.discord_user_id} は24時間以内に予定がないためスキップします")
+                user.is_attack_scheduled = False  # type: ignore
+                continue
             multiplier = random.randint(1, 4)
             offset = multiplier * 30
             print(f"🎲 {user.discord_user_id} のランダム決定: パターン{multiplier} -> {offset}分")
@@ -228,6 +254,31 @@ def get_db():
 
 class PlanRequest(BaseModel):
     discord_user_id: str
+
+
+@app.post("/api/schedules/")
+def create_schedule_from_mentions(req: schemas.ScheduleCreate, db: Session = Depends(get_db)):
+    result = crud.add_schedules_for_mentions(
+        db=db,
+        mentioned_discord_ids=req.mentioned_discord_ids,
+        date_str=req.date,
+        time_str=req.time,
+        title=req.title,
+    )
+
+    # 🌟 🆕 予定が保存されたユーザー（saved_ids）全員の「攻撃フラグ」をONにする！
+    for discord_id in result["saved_ids"]:
+        crud.schedule_attack(db, discord_id)
+        print(f"🎯 [予約完了] DiscordID: {discord_id} の攻撃フラグをONにしました！")
+
+    return {
+        "status": "success",
+        "saved_ids": result["saved_ids"],
+        "skipped_ids": result["skipped_ids"],
+        "date": req.date,
+        "time": req.time,
+        "title": req.title,
+    }
 
 @app.websocket("/ws/windows")
 async def websocket_endpoint(websocket: WebSocket):
