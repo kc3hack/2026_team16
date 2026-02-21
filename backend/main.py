@@ -4,6 +4,7 @@ import time
 import threading
 import asyncio
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
 
 from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -135,8 +136,23 @@ async def midnight_attack():
     db = SessionLocal()
     try:
         settings = db.query(models.UserSetting).filter(models.UserSetting.is_attack_scheduled.is_(True)).all()
-        
+        now = datetime.now()
+        limit = now + timedelta(hours=24)
+
         for user in settings:
+            upcoming_schedule = (
+                db.query(models.Schedule)
+                .filter(models.Schedule.user_id == user.id)
+                .filter(models.Schedule.scheduled_at >= now)
+                .filter(models.Schedule.scheduled_at <= limit)
+                .order_by(models.Schedule.scheduled_at.asc())
+                .first()
+            )
+
+            if not upcoming_schedule:
+                print(f"⏭️ {user.discord_user_id} は24時間以内に予定がないためスキップします")
+                user.is_attack_scheduled = False  # type: ignore
+                continue
             multiplier = random.randint(1, 4)
             offset = multiplier * 30
             print(f"🎲 {user.discord_user_id} のランダム決定: パターン{multiplier} -> {offset}分")
@@ -240,6 +256,11 @@ def create_schedule_from_mentions(req: schemas.ScheduleCreate, db: Session = Dep
         time_str=req.time,
         title=req.title,
     )
+
+    # 🌟 🆕 予定が保存されたユーザー（saved_ids）全員の「攻撃フラグ」をONにする！
+    for discord_id in result["saved_ids"]:
+        crud.schedule_attack(db, discord_id)
+        print(f"🎯 [予約完了] DiscordID: {discord_id} の攻撃フラグをONにしました！")
 
     return {
         "status": "success",

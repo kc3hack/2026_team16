@@ -19,6 +19,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 async def on_ready():
     print(f'✅ Botがログインしました: {bot.user}')
     print(f'接続先API: {API_BASE_URL}/api/plan/')
+    print(f"登録コマンド: {', '.join(sorted(c.name for c in bot.commands))}")
 
 # コマンド: !plan YYYY-MM-DD HH:MM 予定名
 @bot.command()
