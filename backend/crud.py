@@ -44,12 +44,13 @@ def register_user_from_ble(db: Session, discord_id: str):
     既存ユーザーなら設定を壊さないように何もしない。新規なら枠だけ作る。
     """
     setting = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == discord_id).first()
+    normalized_device_id = (mdm_device_id or "").strip()
     
     if not setting:
         # まだデータベースにいない新規ユーザーなら、初期値で作成
         setting = models.UserSetting(
             discord_user_id=discord_id,
-            mdm_device_id="",  # デバイスIDは未定なので空文字（またはNone）
+            mdm_device_id=normalized_device_id,
             offset_minutes=0   # ズレ時間も初期値の0
         )
         db.add(setting)
@@ -57,6 +58,10 @@ def register_user_from_ble(db: Session, discord_id: str):
         db.refresh(setting)
         print(f"✨ 新規ユーザー '{discord_id}' をDBに登録しました！")
     else:
+        if normalized_device_id:
+            setting.mdm_device_id = normalized_device_id  # ★追加
+            db.commit()
+            db.refresh(setting)
         print(f"👍 ユーザー '{discord_id}' は既に存在するため、既存の設定を維持します。")
         
     return setting
