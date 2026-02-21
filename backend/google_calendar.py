@@ -112,3 +112,27 @@ def add_event_to_calendar(access_token: str, refresh_token: str, date: str, time
     return created_event
 
 
+def get_upcoming_events(access_token: str, refresh_token: str, max_results: int = 5):
+    """
+    ユーザーのGoogleカレンダーから直近の予定を取得する（読み取り）。
+
+    Args:
+        access_token:  DBに保存されたアクセストークン
+        refresh_token: DBに保存されたリフレッシュトークン
+        max_results:   取得する予定の最大件数（デフォルト5件）
+    """
+    credentials = _build_credentials(access_token, refresh_token)
+    service = build("calendar", "v3", credentials=credentials)
+
+    # 現在時刻以降の予定を取得（UTC形式）
+    now = datetime.now(timezone.utc).isoformat()
+
+    events_result = service.events().list(
+        calendarId="primary",       # 認証したユーザーのメインカレンダー（Gmailアドレス不要）
+        timeMin=now,                # 現在以降の予定のみ
+        maxResults=max_results,     # 最大件数
+        singleEvents=True,          # 繰り返しイベントも1件ずつ展開
+        orderBy="startTime"         # 開始時刻順
+    ).execute()
+
+    return events_result.get("items", [])

@@ -143,6 +143,55 @@ async def myinfo(ctx):
     except Exception as e:
         await ctx.send(f"❌ サーバーへの接続エラー: {e}\n※サーバーは起動していますか？")
 
+# コマンド: !schedule （Googleカレンダーの直近予定を表示）
+@bot.command()
+async def schedule(ctx):
+    """
+    !schedule
+    Googleカレンダーに登録されている直近5件の予定を表示する。
+    事前に !auth で認証が必要。
+    """
+    discord_id = str(ctx.author.id)
+    url = f"{API_BASE_URL}/api/schedule/{discord_id}"
+
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            data = response.json()
+
+            if data["status"] == "not_found":
+                await ctx.send("⚠️ DBに登録されていません。まず `!auth` で認証してください。")
+                return
+            if data["status"] == "not_authorized":
+                await ctx.send("⚠️ Googleカレンダーの認証が完了していません。`!auth` を実行してください。")
+                return
+            if data["status"] == "error":
+                await ctx.send(f"❌ カレンダー取得エラー: {data['message']}")
+                return
+
+            events = data["events"]
+            if not events:
+                await ctx.send("📅 直近の予定はありません。")
+                return
+
+            msg = "📅 **あなたの直近の予定（Googleカレンダー）**\n──────────────────\n"
+            for i, event in enumerate(events, 1):
+                title = event.get("summary", "（タイトルなし）")
+                start = event.get("start", {})
+                # 終日イベントは "date"、時間指定イベントは "dateTime"
+                start_str = start.get("dateTime", start.get("date", "不明"))
+                # ISO形式を整形（"2026-03-01T10:00:00+09:00" → "2026-03-01 10:00"）
+                if "T" in start_str:
+                    start_str = start_str[:16].replace("T", " ")
+                msg += f"{i}. `{start_str}` | {title}\n"
+            msg += "──────────────────"
+
+            await ctx.send(msg)
+        else:
+            await ctx.send(f"⚠️ 取得に失敗しました。ステータス: {response.status_code}")
+    except Exception as e:
+        await ctx.send(f"❌ サーバーへの接続エラー: {e}\n※サーバーは起動していますか？")
+
 # Bot起動
 if TOKEN:
     bot.run(TOKEN)

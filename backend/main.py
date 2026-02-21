@@ -368,6 +368,37 @@ def get_user_info(discord_user_id: str, db: Session = Depends(get_db)):
         "is_attack_scheduled": user.is_attack_scheduled,
     }
 
+# ==========================
+# Googleカレンダー予定取得API
+# ==========================
+@app.get("/api/schedule/{discord_user_id}")
+def get_schedule(discord_user_id: str, db: Session = Depends(get_db)):
+    """
+    DiscordIDを元にDBからトークンを取得し、
+    Googleカレンダーの直近5件の予定を返す。
+    !schedule コマンドから呼ばれる。
+    """
+    user = db.query(models.UserSetting).filter(
+        models.UserSetting.discord_user_id == discord_user_id
+    ).first()
+
+    if not user:
+        return {"status": "not_found", "message": "DBに登録されていません。!auth で認証してください。"}
+
+    if not user.google_access_token or not user.google_refresh_token:
+        return {"status": "not_authorized", "message": "Googleカレンダーの認証が完了していません。!auth で認証してください。"}
+
+    try:
+        events = google_calendar.get_upcoming_events(
+            access_token=user.google_access_token,
+            refresh_token=user.google_refresh_token,
+            max_results=5
+        )
+        return {"status": "success", "events": events}
+    except Exception as e:
+        print(f"⚠️ カレンダー取得エラー: {e}")
+        return {"status": "error", "message": str(e)}
+
 if __name__ == "__main__":
 
     uvicorn.run(app, host="127.0.0.1", port=8000)
