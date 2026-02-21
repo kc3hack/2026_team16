@@ -3,6 +3,7 @@ import random
 import time
 import threading
 import asyncio
+import uvicorn
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import ble_test
@@ -309,22 +310,30 @@ async def websocket_endpoint(websocket: WebSocket):
 def register_plan(plan: PlanRequest, db: Session = Depends(get_db)):
     crud.schedule_attack(db, plan.discord_user_id)
     
-    # DBからユーザー情報を取得して一緒に返す
     user = db.query(models.UserSetting).filter(
         models.UserSetting.discord_user_id == plan.discord_user_id
     ).first()
 
-    # Googleカレンダー登録（トークンと日時・予定名がある場合のみ）
+    if not user:
+        print(f"⚠️ エラー: Discord ID '{plan.discord_user_id}' は未登録です。")
+        return {"status": "error", "message": "ユーザーが未登録です。先に設定画面から登録してください。"}
+
     calendar_registered = False
-    if (user and user.google_access_token and user.google_refresh_token
-            and plan.date and plan.time and plan.task):
+    
+    # 🌟 修正1: 「is not None」を使ってエディタの __bool__ パニックを回避
+    if (user.google_access_token is not None and 
+        user.google_refresh_token is not None and 
+        plan.date is not None and 
+        plan.time is not None and 
+        plan.task is not None):
+        
         try:
             google_calendar.add_event_to_calendar(
-                access_token=user.google_access_token,
-                refresh_token=user.google_refresh_token,
-                date=plan.date,
-                time=plan.time,
-                task=plan.task,
+                access_token=str(user.google_access_token),    # type: ignore
+                refresh_token=str(user.google_refresh_token),  # type: ignore
+                date=str(plan.date),
+                time=str(plan.time),
+                task=str(plan.task),
             )
             calendar_registered = True
         except Exception as e:
@@ -333,9 +342,9 @@ def register_plan(plan: PlanRequest, db: Session = Depends(get_db)):
     return {
         "status": "success",
         "message": "攻撃予約完了",
-        "user_id": user.id,
-        "offset_minutes": user.offset_minutes,
-        "attack_scheduled": user.is_attack_scheduled,
+        "user_id": user.id,  # type: ignore
+        "offset_minutes": user.offset_minutes,  # type: ignore
+        "attack_scheduled": user.is_attack_scheduled,  # type: ignore
         "calendar_registered": calendar_registered,
     }
 
@@ -432,11 +441,6 @@ def get_user_info(discord_user_id: str, db: Session = Depends(get_db)):
 # ==========================
 @app.get("/api/schedule/{discord_user_id}")
 def get_schedule(discord_user_id: str, db: Session = Depends(get_db)):
-    """
-    DiscordIDを元にDBからトークンを取得し、
-    Googleカレンダーの直近5件の予定を返す。
-    !schedule コマンドから呼ばれる。
-    """
     user = db.query(models.UserSetting).filter(
         models.UserSetting.discord_user_id == discord_user_id
     ).first()
@@ -444,13 +448,15 @@ def get_schedule(discord_user_id: str, db: Session = Depends(get_db)):
     if not user:
         return {"status": "not_found", "message": "DBに登録されていません。!auth で認証してください。"}
 
-    if not user.google_access_token or not user.google_refresh_token:
+    # 🌟 修正ポイント: 「is None」を使うことでエディタのパニックを回避
+    if user.google_access_token is None or user.google_refresh_token is None:
         return {"status": "not_authorized", "message": "Googleカレンダーの認証が完了していません。!auth で認証してください。"}
 
     try:
+        # 🌟 修正ポイント: str()で囲み、さらに # type: ignore で強制突破
         events = google_calendar.get_upcoming_events(
-            access_token=user.google_access_token,
-            refresh_token=user.google_refresh_token,
+            access_token=str(user.google_access_token),    # type: ignore
+            refresh_token=str(user.google_refresh_token),  # type: ignore
             max_results=5
         )
         return {"status": "success", "events": events}
@@ -489,5 +495,12 @@ def get_wifi_ssids():
 
 @app.get("/setup")
 def setup_page():
-    return FileResponse("backend/setup.html")
+    # 🌟 魔法のパス指定：main.py自身の場所を基準に setup.html を探す
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(BASE_DIR, "setup.html")
+    
+    if not os.path.exists(file_path):
+        return {"error": f"ファイルが見つかりません: {file_path}"}
+        
+    return FileResponse(file_path)
     
