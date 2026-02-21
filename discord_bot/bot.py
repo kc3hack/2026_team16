@@ -1,5 +1,5 @@
 import discord
-imporr asyncio
+import asyncio
 from discord.ext import commands
 import requests
 import os
