@@ -15,8 +15,9 @@ from pydantic import BaseModel
 # 自作モジュール
 import models
 import crud
+import google_calendar
 from database import SessionLocal, engine
-from ble_test import run_ble_server
+from ble_test import run_ble_server 
 import ble_beacon_tx
 from mdm_client import MDMClient
 
@@ -226,8 +227,13 @@ def get_db():
     finally:
         db.close()
 
+from typing import Optional
+
 class PlanRequest(BaseModel):
     discord_user_id: str
+    date: Optional[str] = None   # 予定日付 "YYYY-MM-DD"
+    time: Optional[str] = None   # 予定時刻 "HH:MM"
+    task: Optional[str] = None   # 予定名
 
 @app.websocket("/ws/windows")
 async def websocket_endpoint(websocket: WebSocket):
@@ -243,5 +249,126 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.post("/api/plan/")
 def register_plan(plan: PlanRequest, db: Session = Depends(get_db)):
     crud.schedule_attack(db, plan.discord_user_id)
-    print(f"🎯 [予約完了] DiscordID: {plan.discord_user_id} の攻撃フラグをONにしました！(ズレ時間は深夜0時に決定)")
-    return {"status": "success", "message": "攻撃予約完了（ズレ時間は実行時にランダムで決まります）"}
+    
+    # DBからユーザー情報を取得して一緒に返す
+    user = db.query(models.UserSetting).filter(
+        models.UserSetting.discord_user_id == plan.discord_user_id
+    ).first()
+
+    # Googleカレンダー登録（トークンと日時・予定名がある場合のみ）
+    calendar_registered = False
+    if (user and user.google_access_token and user.google_refresh_token
+            and plan.date and plan.time and plan.task):
+        try:
+            google_calendar.add_event_to_calendar(
+                access_token=user.google_access_token,
+                refresh_token=user.google_refresh_token,
+                date=plan.date,
+                time=plan.time,
+                task=plan.task,
+            )
+            calendar_registered = True
+        except Exception as e:
+            print(f"⚠️ Googleカレンダー登録エラー: {e}")
+
+    return {
+        "status": "success",
+        "message": "攻撃予約完了",
+        "user_id": user.id,
+        "offset_minutes": user.offset_minutes,
+        "attack_scheduled": user.is_attack_scheduled,
+        "calendar_registered": calendar_registered,
+    }
+
+# ==========================
+# Google OAuth2 認証
+# ==========================
+@app.get("/auth/google")
+def google_auth(discord_user_id: str):
+    """
+    !auth コマンドから呼ばれる。
+    このURLをユーザーにDMで送る。
+    """
+    auth_url = google_calendar.get_auth_url(discord_user_id)
+    return {"auth_url": auth_url}
+
+@app.get("/auth/callback")
+def google_callback(code: str, state: str, db: Session = Depends(get_db)):
+    """
+    Googleがリダイレクトするエンドポイント。
+    コードをトークンに交換してDBに保存する。
+    stateにDiscordIDが入っている。
+    """
+    discord_user_id = state
+
+    # 認証コードをトークンに交換
+    tokens = google_calendar.exchange_code_for_tokens(code)
+
+    # DBにトークンを保存
+    user = db.query(models.UserSetting).filter(
+        models.UserSetting.discord_user_id == discord_user_id
+    ).first()
+    if user:
+        user.google_access_token = tokens["access_token"]   # type: ignore
+        user.google_refresh_token = tokens["refresh_token"]  # type: ignore
+    else:
+        user = models.UserSetting(
+            discord_user_id=discord_user_id,
+            google_access_token=tokens["access_token"],
+            google_refresh_token=tokens["refresh_token"],
+        )
+        db.add(user)
+    db.commit()
+    print(f"✅ [Google認証完了] DiscordID: {discord_user_id} のトークンを保存しました")
+
+    # ブラウザに表示する完了メッセージ
+    return {"認証完了": "✅ Googleカレンダーへのアクセスが許可されました！Discordに戻って!planを試してみてください。"}
+
+class RegisterRequest(BaseModel):
+    discord_user_id: str
+    gmail: str
+
+@app.post("/api/register/")
+def register_gmail_endpoint(req: RegisterRequest, db: Session = Depends(get_db)):
+    """
+    DiscordIDとGmailを紐付けてDBに保存する。
+    !register コマンドから呼ばれる。
+    """
+    user = crud.register_gmail(db, req.discord_user_id, req.gmail)
+    print(f"📧 [Gmail登録] DiscordID: {req.discord_user_id} → {req.gmail}")
+    return {
+        "status": "success",
+        "discord_user_id": user.discord_user_id,
+        "gmail": user.gmail
+    }
+
+# ==========================
+# ユーザー情報取得API（テスト用）
+# ==========================
+@app.get("/api/user/{discord_user_id}")
+def get_user_info(discord_user_id: str, db: Session = Depends(get_db)):
+    """
+    DiscordIDを元にDBの全情報を返す。
+    !myinfo コマンドから呼ばれる。
+    """
+    user = db.query(models.UserSetting).filter(
+        models.UserSetting.discord_user_id == discord_user_id
+    ).first()
+
+    if not user:
+        return {"status": "not_found", "message": "このユーザーはDBに登録されていません。"}
+
+    return {
+        "status": "success",
+        "id": user.id,
+        "discord_user_id": user.discord_user_id,
+        "gmail": user.gmail,
+        "mdm_device_id": user.mdm_device_id,
+        "offset_minutes": user.offset_minutes,
+        "is_attack_scheduled": user.is_attack_scheduled,
+    }
+
+if __name__ == "__main__":
+
+    uvicorn.run(app, host="127.0.0.1", port=8000)
+    

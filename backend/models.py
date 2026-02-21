@@ -8,3 +8,6 @@ class UserSetting(Base):
     mdm_device_id = Column(String)
     offset_minutes = Column(Integer, default=0)
     is_attack_scheduled = Column(Boolean, default=False)
+    gmail = Column(String, nullable=True)                      # GoogleカレンダーのGmailアドレス
+    google_access_token = Column(String, nullable=True)        # OAuthアクセストークン
+    google_refresh_token = Column(String, nullable=True)       # OAuthリフレッシュトークン

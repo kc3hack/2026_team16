@@ -83,3 +83,30 @@ def schedule_attack(db: Session, discord_id: str):
     # 以前は offset（ズレ時間）を返していましたが、
     # 今回からは「成功したかどうかのTrue」だけを返します
     return True
+
+# ＝＝＝ ④ DiscordIDにGmailを紐付ける処理 ＝＝＝
+def register_gmail(db: Session, discord_id: str, gmail: str):
+    """
+    DiscordIDに対してGmailアドレスを登録する。
+    既存ユーザーならGmailを更新し、新規なら枠を作って登録する。
+    """
+    setting = db.query(models.UserSetting).filter(
+        models.UserSetting.discord_user_id == discord_id
+    ).first()
+
+    if setting:
+        # 既にいれば Gmail だけ上書き更新
+        setting.gmail = gmail  # type: ignore
+        print(f"📧 ユーザー '{discord_id}' のGmailを更新しました: {gmail}")
+    else:
+        # いなければ新規作成
+        setting = models.UserSetting(
+            discord_user_id=discord_id,
+            gmail=gmail
+        )
+        db.add(setting)
+        print(f"✨ 新規ユーザー '{discord_id}' をGmail '{gmail}' で登録しました！")
+
+    db.commit()
+    db.refresh(setting)
+    return setting
