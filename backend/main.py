@@ -139,15 +139,24 @@ async def midnight_attack():
         now = datetime.now()
         limit = now + timedelta(hours=24)
 
-        for user in settings:
-            upcoming_schedule = (
+        # 事前に全ユーザー分の24時間以内の最も早い予定をまとめて取得しておく（N+1クエリ回避）
+        user_ids = [user.id for user in settings]
+        schedules_by_user_id = {}
+        if user_ids:
+            all_schedules = (
                 db.query(models.Schedule)
-                .filter(models.Schedule.user_id == user.id)
+                .filter(models.Schedule.user_id.in_(user_ids))
                 .filter(models.Schedule.scheduled_at >= now)
                 .filter(models.Schedule.scheduled_at <= limit)
-                .order_by(models.Schedule.scheduled_at.asc())
-                .first()
+                .order_by(models.Schedule.user_id, models.Schedule.scheduled_at.asc())
+                .all()
             )
+            for schedule in all_schedules:
+                # user_id, scheduled_at の順でソート済みなので、最初の一件がそのユーザーの最も早い予定
+                if schedule.user_id not in schedules_by_user_id:
+                    schedules_by_user_id[schedule.user_id] = schedule
+        for user in settings:
+            upcoming_schedule = schedules_by_user_id.get(user.id)
 
             if not upcoming_schedule:
                 print(f"⏭️ {user.discord_user_id} は24時間以内に予定がないためスキップします")

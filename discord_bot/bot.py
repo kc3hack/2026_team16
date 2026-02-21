@@ -1,4 +1,5 @@
 import discord
+imporr asyncio
 from discord.ext import commands
 import requests
 import os
@@ -34,7 +35,7 @@ async def plan(ctx, date: str, time: str, *, task: str):
     payload = {"discord_user_id": discord_id}
 
     try:
-        response = requests.post(setting_url, json=payload)
+        response = await asyncio.to_thread(requests.post, setting_url, json=payload)
 
         if response.status_code == 200:
             await ctx.send(f"✅ {target_name} さんの予定を登録しました！\n📅 {date} {time}\n📝 {task}\n（※裏でTimeHackerが起動準備に入りました...）")
