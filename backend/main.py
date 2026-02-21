@@ -6,8 +6,8 @@ import asyncio
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import ble_test
-
-from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect
+import subprocess
+from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
 from gpiozero import Button
 from pydantic import BaseModel
+from fastapi.responses import FileResponse
 
 # 自作モジュール
 import models
@@ -465,4 +466,33 @@ def get_schedule(discord_user_id: str, db: Session = Depends(get_db)):
 if __name__ == "__main__":
 
     uvicorn.run(app, host="127.0.0.1", port=8000)
+    
+@app.get("/api/wifi/ssids")
+def get_wifi_ssids():
+    try:
+        result = subprocess.run(
+            ["nmcli", "-t", "-f", "SSID", "dev", "wifi", "list", "--rescan", "yes"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail=result.stderr.strip() or "nmcli failed")
+
+        seen = set()
+        ssids = []
+        for line in result.stdout.splitlines():
+            s = line.strip()
+            if s and s not in seen:
+                seen.add(s)
+                ssids.append(s)
+
+        return {"ssids": ssids}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="wifi scan timeout")
+
+@app.get("/setup")
+def setup_page():
+    return FileResponse("backend/setup.html")
     
