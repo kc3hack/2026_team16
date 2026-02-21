@@ -9,13 +9,14 @@ import ble_test
 import subprocess
 from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
 from gpiozero import Button
 from pydantic import BaseModel
 from fastapi.responses import FileResponse
+import uvicorn
+import subprocess
 
 # 自作モジュール
 import models
@@ -34,6 +35,7 @@ PROFILE_GMT9_5 = os.getenv("MDM_PROFILE_GMT9_5")
 PROFILE_GMT10 = os.getenv("MDM_PROFILE_GMT10")
 PROFILE_GMT10_5 = os.getenv("MDM_PROFILE_GMT10_5")
 PROFILE_GMT11 = os.getenv("MDM_PROFILE_GMT11")
+WIFI_SCAN_IFACE = os.getenv("WIFI_SCAN_IFACE", "wlan0")
 
 # DBテーブル作成
 models.Base.metadata.create_all(bind=engine)
@@ -267,11 +269,6 @@ async def lifespan(app: FastAPI):
 # ==========================
 app = FastAPI(lifespan=lifespan)
 
-@app.get("/setup")
-def get_setup_page():
-    # 🌟 ファイル名を setup.html に変更しました！
-    return FileResponse("static/setup.html")
-
 def get_db():
     db = SessionLocal()
     try:
@@ -471,7 +468,7 @@ if __name__ == "__main__":
 def get_wifi_ssids():
     try:
         result = subprocess.run(
-            ["nmcli", "-t", "-f", "SSID", "dev", "wifi", "list", "--rescan", "yes"],
+            ["nmcli", "-t", "-f", "SSID", "dev", "wifi", "list", "ifname", WIFI_SCAN_IFACE, "--rescan", "yes"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -496,3 +493,5 @@ def get_wifi_ssids():
 def setup_page():
     return FileResponse("backend/setup.html")
     
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
