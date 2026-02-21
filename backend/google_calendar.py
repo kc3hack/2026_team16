@@ -136,3 +136,35 @@ def get_upcoming_events(access_token: str, refresh_token: str, max_results: int 
     ).execute()
 
     return events_result.get("items", [])
+
+
+def get_today_events(access_token: str, refresh_token: str):
+    """
+    ユーザーのGoogleカレンダーから「今日」の予定を取得する。
+    今日 00:00~23:59 JST の範囲に絞って取得する。
+
+    Returns:
+        今日の予定リスト。0件の場合は空リスト。
+    """
+    credentials = _build_credentials(access_token, refresh_token)
+    service = build("calendar", "v3", credentials=credentials)
+
+    JST = timezone(timedelta(hours=9))
+    now_jst = datetime.now(JST)
+
+    # 今日の 00:00:00 JST
+    today_start = now_jst.replace(hour=0, minute=0, second=0, microsecond=0)
+    # 今日の 23:59:59 JST
+    today_end = now_jst.replace(hour=23, minute=59, second=59, microsecond=0)
+
+    events_result = service.events().list(
+        calendarId="primary",
+        timeMin=today_start.isoformat(),
+        timeMax=today_end.isoformat(),
+        singleEvents=True,
+        orderBy="startTime"
+    ).execute()
+
+    events = events_result.get("items", [])
+    print(f"📅 [Calendar] 今日の予定: {len(events)}件")
+    return events
