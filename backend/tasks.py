@@ -29,11 +29,11 @@ def update_daily_offsets():
             if upcoming_schedules:
                 # 予定があるなら、時空を歪める（例: +60分）
                 print(f"User {user.username}: 明日予定あり。時間を進めます。")
-                user.current_offset_minutes = 60
+                user.current_offset_minutes = 60 # type: ignore
             else:
                 # 予定がないなら、時間を元に戻す
                 print(f"User {user.username}: 明日予定なし。時間を戻します。")
-                user.current_offset_minutes = 0
+                user.current_offset_minutes = 0 # type: ignore
             
         # 変更を保存
         db.commit()
