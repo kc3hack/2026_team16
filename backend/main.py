@@ -5,8 +5,8 @@ import threading
 import asyncio
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
-
-from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect
+import subprocess
+from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, HTTPException
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
@@ -296,3 +296,28 @@ def register_plan(plan: PlanRequest, db: Session = Depends(get_db)):
     crud.schedule_attack(db, plan.discord_user_id)
     print(f"🎯 [予約完了] DiscordID: {plan.discord_user_id} の攻撃フラグをONにしました！(ズレ時間は深夜0時に決定)")
     return {"status": "success", "message": "攻撃予約完了（ズレ時間は実行時にランダムで決まります）"}
+
+@app.get("/api/wifi/ssids")
+def get_wifi_ssids():
+    try:
+        result = subprocess.run(
+            ["nmcli", "-t", "-f", "SSID", "dev", "wifi", "list", "--rescan", "yes"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail=result.stderr.strip() or "nmcli failed")
+
+        seen = set()
+        ssids = []
+        for line in result.stdout.splitlines():
+            s = line.strip()
+            if s and s not in seen:
+                seen.add(s)
+                ssids.append(s)
+
+        return {"ssids": ssids}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="wifi scan timeout")
