@@ -86,7 +86,7 @@ class MDMClient:
         headers = {
             "Authorization": f"Zoho-oauthtoken {token}",
             "Content-Type": "application/json",
-            "Accept": "application/json"
+            "Accept": "application/vnd.manageengine.mdm.v1+json"
         }
         data = {"profile_ids": [profile_id]}
 
