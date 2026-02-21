@@ -267,11 +267,6 @@ async def lifespan(app: FastAPI):
 # ==========================
 app = FastAPI(lifespan=lifespan)
 
-@app.get("/setup")
-def get_setup_page():
-    # 🌟 ファイル名を setup.html に変更しました！
-    return FileResponse("static/setup.html")
-
 def get_db():
     db = SessionLocal()
     try:
