@@ -7,7 +7,7 @@ import sys
 DEVICE_NAME = b"TimeFaker_TX"
 
 # 日本標準時（JST）のタイムゾーンを定義（UTC+9時間）
-JST = timezone(timedelta(hours=+8), 'JST')
+JST = timezone(timedelta(hours=+9), 'JST')
 
 def execute_cmd(cmd):
     """コマンドを実行し、エラーを無視して続行する"""
@@ -48,11 +48,8 @@ def broadcast_time_burst(offset_min, repeat_count=3, interval_ms=100):
         # 1. 現在の日本時間（JST）を正確に取得する
         now_jst = datetime.now(JST)
         
-        # 2. オフセット（ずらす時間）をプラスして「未来の時間」を計算する
-        shifted_time = now_jst + timedelta(minutes=offset_min)
-        
         # 3. 計算された未来の時間の 時・分・秒 を取り出す
-        hh, mm, ss = shifted_time.hour, shifted_time.minute, shifted_time.second
+        hh, mm, ss = now_jst.hour, now_jst.minute, now_jst.second
         
         total_len, payload_bytes = build_adv_payload(hh, mm, ss, offset_min)
         
