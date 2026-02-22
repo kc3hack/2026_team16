@@ -117,7 +117,7 @@ async def evaluate_clicks():
 
     if count == 1:
         print("🟢 [ボタン] 1回短押し → 攻撃実行")
-        await execute_shift_action()
+        await executor.execute(offset=0)
     elif count == 2:
         print("🔴 [ボタン] 2回短押し → 復旧実行")
         await execute_restore_action()
