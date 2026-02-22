@@ -10,14 +10,8 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 TOKEN = os.getenv('DISCORD_BOT_TOKEN')
 
-# API接続先の設定と ngrok ガード
-raw_api_url = os.getenv('API_BASE_URL', "http://127.0.0.1:8000")
-if "ngrok" in raw_api_url:
-    print(f"⚠️ [Security] ngrok URL Detected in Bot Environment: {raw_api_url}")
-    print("   → Forcing default local API URL: http://127.0.0.1:8000")
-    API_BASE_URL = "http://127.0.0.1:8000"
-else:
-    API_BASE_URL = raw_api_url
+# API接続先の設定
+API_BASE_URL = os.getenv('API_BASE_URL', "http://127.0.0.1:8000")
 
 # !plan コマンドを受け付ける設定
 intents = discord.Intents.default()
