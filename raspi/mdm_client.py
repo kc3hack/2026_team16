@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from dotenv import load_dotenv
 
@@ -17,6 +18,10 @@ class MDMClient:
         self.refresh_token = (os.getenv("MDM_REFRESH_TOKEN") or "").strip()
         self.device_id = (os.getenv("MDM_DEVICE_ID") or "").strip()
 
+        # トークン使い回し（キャッシュ）用の変数
+        self._access_token = None
+        self._token_expiry = 0
+
     def _missing_env_keys(self):
         missing = []
         if not self.client_id:
@@ -30,12 +35,20 @@ class MDMClient:
         return missing
 
     def _get_access_token(self):
-        """アクセストークンを再取得する内部メソッド"""
+        """アクセストークンを取得（有効なキャッシュがあればそれを返す）"""
         missing = self._missing_env_keys()
         if missing:
             print(f"[MDM] ❌ 必須環境変数が不足しています: {', '.join(missing)}")
             return None
 
+        # 現在の時刻を取得
+        current_time = time.time()
+        
+        # キャッシュされたトークンがあり、かつ有効期限内（余裕を持って期限の60秒前）なら使い回す
+        if self._access_token and current_time < (self._token_expiry - 60):
+            return self._access_token
+
+        print("[MDM] 🔄 新しいアクセストークンを要求します...")
         try:
             payload = {
                 "refresh_token": self.refresh_token,
@@ -52,11 +65,20 @@ class MDMClient:
 
             body = res.json()
             token = body.get("access_token")
+            # 通常は3600秒（1時間）が返ってくる
+            expires_in = body.get("expires_in", 3600) 
+
             if not token:
                 print(f"[MDM] ❌ access_token がレスポンスにありません: {body}")
                 return None
 
+            # 取得したトークンと、期限切れになる時刻を記憶する
+            self._access_token = token
+            self._token_expiry = current_time + expires_in
+            print(f"[MDM] ✅ 新しいトークンを取得・保存しました (有効期間: {expires_in}秒)")
+
             return token
+            
         except requests.exceptions.Timeout:
             print("[MDM] ❌ Token Timeout: 認証サーバー応答待ちでタイムアウトしました")
             return None

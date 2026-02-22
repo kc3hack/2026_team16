@@ -1,12 +1,12 @@
 services:
-  # --- 既存のFastAPIサーバー ---
-  engineer-hub:
+  raspi-server:
     build: .
-    container_name: engineer-hub-server
+    container_name: raspi-server
     env_file:
       - .env
     privileged: true
     network_mode: "host"
     volumes:
+      # NetworkManager(Wi-Fi)やBluetooth(bluez)のデーモンと通信するために必須
       - /var/run/dbus:/var/run/dbus
     restart: always

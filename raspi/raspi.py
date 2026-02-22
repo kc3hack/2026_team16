@@ -76,13 +76,12 @@ except ImportError as e:
     executor = None  # type: ignore
 
 # ==========================
-# ボタン操作ロジック
+# ボタン操作ロジック (改善版)
 # ==========================
 loop = None
 button = None
 press_start = None
 click_count = 0
-click_timer = None
 pairing_active = False
 
 def on_press():
@@ -90,9 +89,10 @@ def on_press():
     press_start = time_module.time()
 
 def on_release():
-    global press_start, click_count, click_timer, loop
+    global press_start, click_count, loop
     if press_start is None or loop is None:
         return
+    
     duration = time_module.time() - press_start
     press_start = None
 
@@ -102,18 +102,22 @@ def on_release():
         asyncio.run_coroutine_threadsafe(toggle_pairing(), loop)
         return
 
-    # 短押し → カウント
+    # 短押し → カウントを増やし、評価処理をスケジュールする
     click_count += 1
-    if click_timer is not None:
-        click_timer.cancel()
-    click_timer = loop.call_later(0.5, lambda: asyncio.run_coroutine_threadsafe(evaluate_clicks(), loop))
+    # 最初のクリックの時だけ、0.5秒後に評価するタスクを走らせる
+    if click_count == 1:
+        asyncio.run_coroutine_threadsafe(delayed_evaluate_clicks(), loop)
 
-
-async def evaluate_clicks():
-    """短押し回数に応じた処理"""
+async def delayed_evaluate_clicks():
+    """0.5秒待ってからクリック回数を評価する非同期タスク"""
     global click_count
+    await asyncio.sleep(0.5)
+    
     count = click_count
-    click_count = 0
+    click_count = 0  # カウントをリセット
+    
+    if count == 0:
+        return
 
     if count == 1:
         print("🟢 [ボタン] 1回短押し → 攻撃実行")
@@ -125,7 +129,6 @@ async def evaluate_clicks():
     else:
         print(f"⚠️ [ボタン] {count}回短押し → 未定義")
 
-
 # ==========================
 # 攻撃ロジック
 # ==========================
@@ -134,51 +137,62 @@ async def execute_shift_action():
     サーバーAPIからユーザー情報を取得し、
     Google Calendarを確認して攻撃を実行する。
     """
-    if executor is None:
-        print("❌ ハードウェアが初期化されていません")
-        return
+    try:
+        if executor is None:
+            print("❌ ハードウェアが初期化されていません")
+            return
 
-    # サーバーからこのラズパイに紐づくユーザーを取得
-    users = api_client.get_my_users()
-    if not users:
-        print("⚠️ 紐づくユーザーがいません")
-        return
+        print("🔄 [通信] サーバーへユーザー情報を問い合わせています...")
+        
+        # サーバーからこのラズパイに紐づくユーザーを取得
+        users = api_client.get_my_users()
+        
+        if not users:
+            print("⚠️ 紐づくユーザーがいません")
+            return
+            
+        print(f"✅ [通信] ユーザー情報を取得しました: {len(users)}件")
 
-    for user in users:
-        discord_id = user.get("discord_user_id", "")
-        access_token = user.get("google_access_token")
-        refresh_token = user.get("google_refresh_token")
+        for user in users:
+            discord_id = user.get("discord_user_id", "")
+            access_token = user.get("google_access_token")
+            refresh_token = user.get("google_refresh_token")
 
-        if not access_token or not refresh_token:
-            print(f"⚠️ {discord_id}: OAuthトークン未設定、スキップ")
-            continue
+            if not access_token or not refresh_token:
+                print(f"⚠️ {discord_id}: OAuthトークン未設定、スキップ")
+                continue
 
-        # Google Calendarから今日の予定を確認
-        events = calendar_checker.get_today_events(
-            access_token=access_token,
-            refresh_token=refresh_token,
-            discord_user_id=discord_id,
-        )
+            print(f"🔄 [Calendar] {discord_id} のカレンダーを確認中...")
+            events = calendar_checker.get_today_events(
+                access_token=access_token,
+                refresh_token=refresh_token,
+                discord_user_id=discord_id,
+            )
 
-        if not events:
-            print(f"📅 {discord_id}: 今日の予定なし、攻撃スキップ")
-            continue
+            if not events:
+                print(f"📅 {discord_id}: 今日の予定なし、攻撃スキップ")
+                continue
 
-        # 予定あり → ランダムなオフセットで攻撃
-        multiplier = random.randint(1, 4)
-        offset = multiplier * 30
-        print(f"🎯 {discord_id}: 予定あり！ オフセット {offset}分 で攻撃開始")
-        await executor.execute(offset)
-
+            multiplier = random.randint(1, 4)
+            offset = multiplier * 30
+            print(f"🎯 {discord_id}: 予定あり！ オフセット {offset}分 で攻撃開始")
+            await executor.execute(offset)
+            
+    except Exception as e:
+        import traceback
+        print(f"🚨 [エラー発生] 攻撃処理の途中でエラーが起きました:\n{traceback.format_exc()}")
 
 async def execute_restore_action():
     """全デバイスを元の時間に復旧する。"""
-    if executor is None:
-        print("❌ ハードウェアが初期化されていません")
-        return
-    print("🔄 復旧処理を開始します...")
-    await executor.restore()
-
+    try:
+        if executor is None:
+            print("❌ ハードウェアが初期化されていません")
+            return
+        print("🔄 復旧処理を開始します...")
+        await executor.restore()
+    except Exception as e:
+        import traceback
+        print(f"🚨 [エラー発生] 復旧処理の途中でエラーが起きました:\n{traceback.format_exc()}")
 
 # ==========================
 # ペアリングモード
@@ -198,7 +212,6 @@ async def toggle_pairing():
         except ImportError:
             print("⚠️ BLEプロビジョニングモジュールが見つかりません")
 
-
 # ==========================
 # 深夜スケジューラー
 # ==========================
@@ -206,7 +219,6 @@ async def midnight_attack():
     """深夜0時に自動で攻撃判定を実行する。"""
     print("🕛 [スケジューラー] 深夜の攻撃判定を開始します...")
     await execute_shift_action()
-
 
 # ==========================
 # アプリ起動・終了
@@ -238,7 +250,6 @@ async def lifespan(app: FastAPI):
 # ローカルWebSocket（Windows PC用）のみ提供
 app = FastAPI(lifespan=lifespan)
 
-
 @app.websocket("/ws/windows")
 async def websocket_endpoint(websocket: WebSocket):
     """ローカルネットワーク上のWindows PCからの接続を受け付ける"""
@@ -248,7 +259,6 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
-
 
 # ==========================
 # エントリポイント
