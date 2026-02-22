@@ -6,9 +6,11 @@ import os
 from datetime import datetime
 from dotenv import load_dotenv
 
-# .envファイルから環境変数を読み込む
-load_dotenv()
+# .envファイルから環境変数を読み込む（システムの環境変数より優先）
+load_dotenv(override=True)
 TOKEN = os.getenv('DISCORD_BOT_TOKEN')
+
+# API接続先の設定
 API_BASE_URL = os.getenv('API_BASE_URL', "http://127.0.0.1:8000")
 
 # !plan コマンドを受け付ける設定
