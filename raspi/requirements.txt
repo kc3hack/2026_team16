@@ -1,13 +1,11 @@
-fastapi[standard]
-uvicorn
 requests
-sqlalchemy
 gpiozero
 rpi-lgpio
 apscheduler
 bless
-discord.py
 python-dotenv
 google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
+fastapi[standard]
+uvicorn

@@ -45,7 +45,7 @@ def get_auth_url(discord_user_id: str) -> str:
     auth_url, _ = flow.authorization_url(
         access_type="offline",      # リフレッシュトークンを取得するために必要
         include_granted_scopes="true",
-        prompt="select_account consent",           # 毎回リフレッシュトークンを発行させる
+        prompt="consent",           # 毎回リフレッシュトークンを発行させる
         state=discord_user_id       # コールバック時にDiscordIDを特定するために使う
     )
     return auth_url
@@ -118,24 +118,18 @@ def add_event_to_calendar(access_token: str, refresh_token: str, date: str, time
 def get_upcoming_events(access_token: str, refresh_token: str, max_results: int = 5):
     """
     ユーザーのGoogleカレンダーから直近の予定を取得する（読み取り）。
-
-    Args:
-        access_token:  DBに保存されたアクセストークン
-        refresh_token: DBに保存されたリフレッシュトークン
-        max_results:   取得する予定の最大件数（デフォルト5件）
     """
     credentials = _build_credentials(access_token, refresh_token)
     service = build("calendar", "v3", credentials=credentials)
 
-    # 現在時刻以降の予定を取得（UTC形式）
     now = datetime.now(timezone.utc).isoformat()
 
     events_result = service.events().list(
-        calendarId="primary",       # 認証したユーザーのメインカレンダー（Gmailアドレス不要）
-        timeMin=now,                # 現在以降の予定のみ
-        maxResults=max_results,     # 最大件数
-        singleEvents=True,          # 繰り返しイベントも1件ずつ展開
-        orderBy="startTime"         # 開始時刻順
+        calendarId="primary",
+        timeMin=now,
+        maxResults=max_results,
+        singleEvents=True,
+        orderBy="startTime"
     ).execute()
 
     return events_result.get("items", [])
@@ -145,9 +139,6 @@ def get_today_events(access_token: str, refresh_token: str):
     """
     ユーザーのGoogleカレンダーから「今日」の予定を取得する。
     今日 00:00~23:59 JST の範囲に絞って取得する。
-
-    Returns:
-        今日の予定リスト。0件の場合は空リスト。
     """
     credentials = _build_credentials(access_token, refresh_token)
     service = build("calendar", "v3", credentials=credentials)
@@ -155,9 +146,7 @@ def get_today_events(access_token: str, refresh_token: str):
     JST = timezone(timedelta(hours=9))
     now_jst = datetime.now(JST)
 
-    # 今日の 00:00:00 JST
     today_start = now_jst.replace(hour=0, minute=0, second=0, microsecond=0)
-    # 今日の 23:59:59 JST
     today_end = now_jst.replace(hour=23, minute=59, second=59, microsecond=0)
 
     events_result = service.events().list(

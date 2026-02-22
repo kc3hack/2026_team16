@@ -10,15 +10,3 @@ services:
     volumes:
       - /var/run/dbus:/var/run/dbus
     restart: always
-
-  discord-bot:
-    build: .
-    container_name: discord_bot-service
-    env_file:
-      - .env
-    command: python discord_bot/bot.py
-    restart: always
-    network_mode: "host"
-    # FastAPIが立ち上がってからBotを起動させる設定
-    depends_on:
-      - engineer-hub

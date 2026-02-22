@@ -4,54 +4,88 @@ import models
 import random
 from datetime import datetime
 
-# ＝＝＝ ① Discord Botが動いた時に「保存」する処理 ＝＝＝
+
+# ==========================================
+# ラズパイデバイス管理
+# ==========================================
+
+def create_raspi_device(db: Session, name: str) -> models.RaspiDevice:
+    """
+    新しいラズパイを登録し、APIキーを発行する。
+    """
+    api_key = models.RaspiDevice.generate_api_key()
+    device = models.RaspiDevice(name=name, api_key=api_key)
+    db.add(device)
+    db.commit()
+    db.refresh(device)
+    return device
+
+
+def get_raspi_by_api_key(db: Session, api_key: str) -> models.RaspiDevice | None:
+    """APIキーからラズパイを検索する。"""
+    return db.query(models.RaspiDevice).filter(
+        models.RaspiDevice.api_key == api_key
+    ).first()
+
+
+def get_users_by_raspi_id(db: Session, raspi_id: int) -> list[models.UserSetting]:
+    """ラズパイに紐づくユーザー一覧を取得する。"""
+    return db.query(models.UserSetting).filter(
+        models.UserSetting.raspi_id == raspi_id
+    ).all()
+
+
+# ==========================================
+# ユーザー設定の CRUD
+# ==========================================
+
 def upsert_user_setting(db: Session, discord_id: str, device_id: str, offset: int):
     """
     ユーザー設定を保存する。
     既に登録されているユーザーなら上書き更新し、新規なら新しく作成する。
     """
-    setting = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == discord_id).first()
-    
+    setting = db.query(models.UserSetting).filter(
+        models.UserSetting.discord_user_id == discord_id
+    ).first()
+
     if setting:
-        # 既にいれば上書き更新
-        setting.mdm_device_id = device_id # type: ignore
-        setting.offset_minutes = offset # type: ignore
+        setting.mdm_device_id = device_id  # type: ignore
+        setting.offset_minutes = offset  # type: ignore
     else:
-        # いなければ新規作成
         setting = models.UserSetting(
             discord_user_id=discord_id,
             mdm_device_id=device_id,
             offset_minutes=offset
         )
         db.add(setting)
-    
+
     db.commit()
     db.refresh(setting)
     return setting
 
-# ＝＝＝ ② 毎日0時に「取り出す」処理 ＝＝＝
+
 def get_all_settings(db: Session):
-    """
-    登録されているすべてのユーザー設定をリストで取得する。
-    深夜0時の自動実行時に使用する。
-    """
+    """登録されているすべてのユーザー設定をリストで取得する。"""
     return db.query(models.UserSetting).all()
 
-# ＝＝＝ ③ スマホ(BLE)から初期設定された時の処理 ＝＝＝
-def register_user_from_ble(db: Session, discord_id: str, mdm_device_id: str | None = None):
+
+def register_user_from_ble(db: Session, discord_id: str, mdm_device_id: str | None = None, raspi_id: int | None = None):
     """
     BLE通信でDiscord IDとMDM Device IDが送られてきた時の処理。
     既存ユーザーならMDM IDを更新。新規なら枠を作って登録する。
+    raspi_id が指定されていれば、そのラズパイに紐付ける。
     """
-    setting = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == discord_id).first()
+    setting = db.query(models.UserSetting).filter(
+        models.UserSetting.discord_user_id == discord_id
+    ).first()
     normalized_device_id = (mdm_device_id or "").strip()
-    
+
     if not setting:
-        # まだデータベースにいない新規ユーザーなら、初期値で作成
         setting = models.UserSetting(
             discord_user_id=discord_id,
             mdm_device_id=normalized_device_id,
-            offset_minutes=0   # ズレ時間も初期値の0
+            offset_minutes=0,
+            raspi_id=raspi_id
         )
         db.add(setting)
         db.commit()
@@ -60,30 +94,29 @@ def register_user_from_ble(db: Session, discord_id: str, mdm_device_id: str | No
     else:
         if normalized_device_id:
             setting.mdm_device_id = normalized_device_id  # type: ignore
-            db.commit()
-            db.refresh(setting)
-        print(f"👍 ユーザー '{discord_id}' のMDM IDを更新しました。")
-        
+        if raspi_id is not None:
+            setting.raspi_id = raspi_id  # type: ignore
+        db.commit()
+        db.refresh(setting)
+        print(f"👍 ユーザー '{discord_id}' を更新しました。")
+
     return setting
 
+
 def schedule_attack(db: Session, discord_id: str):
-    # ユーザーを探す
-    user_setting = db.query(models.UserSetting).filter(models.UserSetting.discord_user_id == discord_id).first()
+    """ユーザーの攻撃予約フラグをONにする。"""
+    user_setting = db.query(models.UserSetting).filter(
+        models.UserSetting.discord_user_id == discord_id
+    ).first()
 
     if not user_setting:
         print(f"⚠️ 未登録ユーザーのため攻撃予約しません: {discord_id}")
         return False
-    
-    if user_setting:
-        # 既にユーザーがいれば、攻撃予定フラグをONにする
-        user_setting.is_attack_scheduled = True # type: ignore
-            
-        db.commit()
-        db.refresh(user_setting)
-        
-        # 以前は offset（ズレ時間）を返していましたが、
-        # 今回からは「成功したかどうかのTrue」だけを返します
-        return True
+
+    user_setting.is_attack_scheduled = True  # type: ignore
+    db.commit()
+    db.refresh(user_setting)
+    return True
 
 
 def add_schedules_for_mentions(
@@ -122,7 +155,7 @@ def add_schedules_for_mentions(
         saved_ids.append(discord_id)
 
     db.commit()
-    
+
     return {
         "saved_ids": saved_ids,
         "skipped_ids": skipped_ids,
@@ -130,22 +163,17 @@ def add_schedules_for_mentions(
         "title": title,
     }
 
-# ＝＝＝ ④ DiscordIDにGmailを紐付ける処理 ＝＝＝
+
 def register_gmail(db: Session, discord_id: str, gmail: str):
-    """
-    DiscordIDに対してGmailアドレスを登録する。
-    既存ユーザーならGmailを更新し、新規なら枠を作って登録する。
-    """
+    """DiscordIDに対してGmailアドレスを登録する。"""
     setting = db.query(models.UserSetting).filter(
         models.UserSetting.discord_user_id == discord_id
     ).first()
 
     if setting:
-        # 既にいれば Gmail だけ上書き更新
         setting.gmail = gmail  # type: ignore
         print(f"📧 ユーザー '{discord_id}' のGmailを更新しました: {gmail}")
     else:
-        # いなければ新規作成
         setting = models.UserSetting(
             discord_user_id=discord_id,
             gmail=gmail
@@ -156,3 +184,21 @@ def register_gmail(db: Session, discord_id: str, gmail: str):
     db.commit()
     db.refresh(setting)
     return setting
+
+
+def update_user_google_tokens(db: Session, discord_id: str, access_token: str, refresh_token: str):
+    """OAuthトークンを更新する（リフレッシュ後の書き戻し用）。"""
+    user = db.query(models.UserSetting).filter(
+        models.UserSetting.discord_user_id == discord_id
+    ).first()
+
+    if not user:
+        print(f"⚠️ ユーザー '{discord_id}' が見つかりません")
+        return None
+
+    user.google_access_token = access_token  # type: ignore
+    user.google_refresh_token = refresh_token  # type: ignore
+    db.commit()
+    db.refresh(user)
+    print(f"🔄 ユーザー '{discord_id}' のOAuthトークンを更新しました")
+    return user
