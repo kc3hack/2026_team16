@@ -29,8 +29,9 @@
 - **自然な行動変容**: 「13時集合」の場合、本人の時計が「12時」の時点で「13時」と表示されるため、絶対的な時間のズレに気づかない引きこもり環境において、強制的にスケジュールを前倒しさせます。
 
 ## 操作説明・デモ動画
-[デモ動画はこちら](https://youtu.be/92Zak6W2jUI?si=Oxu5teCR5N0HHO8W)
-[デモ動画はこちら](https://youtu.be/4AIs5JcykWQ?si=CajPBfKjOpBamlMq)
+[時間の変更のデモ動画](https://youtu.be/4AIs5JcykWQ?si=CajPBfKjOpBamlMq)
+[DiscordBotによる予定追加のデモ動画](https://youtu.be/92Zak6W2jUI?si=Oxu5teCR5N0HHO8W)
+
 <!-- 開発したプロダクトの操作説明について入力してください。また、操作説明デモ動画があれば、埋め込みやリンクを記載してください -->
 
 1. **予定の登録**: Discord上の会話やメンションから、Discord Botを通じて予定（集合時間）を登録します。
@@ -71,7 +72,7 @@
 
 ### Interface
 
-- [Discord.py](http://discord.py/) (Discord Bot)
+- Discord Bot
 - WebSockets (リアルタイム通信)
 
 ### Client / IoT
