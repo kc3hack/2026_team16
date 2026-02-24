@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TimeFaker Controller</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 400px;
+            width: 100%;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+            text-align: center;
+        }
+
+        .status {
+            text-align: center;
+            padding: 10px;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .status.disconnected {
+            background: #fee;
+            color: #c33;
+        }
+
+        .status.connected {
+            background: #efe;
+            color: #3a3;
+        }
+
+        .input-group {
+            margin-bottom: 25px;
+        }
+
+        label {
+            display: block;
+            color: #555;
+            margin-bottom: 8px;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        input[type="number"] {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        input[type="number"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-direction: column;
+        }
+
+        button {
+            padding: 14px 24px;
+            font-size: 16px;
+            font-weight: 600;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+            width: 100%;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-connect {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-connect:hover:not(:disabled) {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-send {
+            background: #48bb78;
+            color: white;
+        }
+
+        .btn-send:hover:not(:disabled) {
+            background: #38a169;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(72, 187, 120, 0.4);
+        }
+
+        .btn-disconnect {
+            background: #f56565;
+            color: white;
+        }
+
+        .btn-disconnect:hover:not(:disabled) {
+            background: #e53e3e;
+        }
+
+        .message {
+            margin-top: 20px;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            text-align: center;
+            display: none;
+        }
+
+        .message.success {
+            background: #d4edda;
+            color: #155724;
+            display: block;
+        }
+
+        .message.error {
+            background: #f8d7da;
+            color: #721c24;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⏰ TimeFaker</h1>
+        
+        <div id="status" class="status disconnected">
+            未接続
+        </div>
+
+        <div class="input-group">
+            <label for="offset">ずらす時間（分）</label>
+            <input type="number" id="offset" value="0" step="1" placeholder="例: 60 または -30">
+        </div>
+
+        <div class="button-group">
+            <button id="connectBtn" class="btn-connect">デバイスに接続</button>
+            <button id="sendBtn" class="btn-send" disabled>送信</button>
+            <button id="disconnectBtn" class="btn-disconnect" disabled>切断</button>
+        </div>
+
+        <div id="message" class="message"></div>
+    </div>
+
+    <script>
+        const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+        const RX_CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+
+        let device = null;
+        let characteristic = null;
+
+        const statusDiv = document.getElementById('status');
+        const connectBtn = document.getElementById('connectBtn');
+        const sendBtn = document.getElementById('sendBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const offsetInput = document.getElementById('offset');
+        const messageDiv = document.getElementById('message');
+
+        function showMessage(text, type) {
+            messageDiv.textContent = text;
+            messageDiv.className = `message ${type}`;
+            setTimeout(() => {
+                messageDiv.className = 'message';
+            }, 3000);
+        }
+
+        function updateUI(connected) {
+            if (connected) {
+                statusDiv.textContent = '接続済み';
+                statusDiv.className = 'status connected';
+                connectBtn.disabled = true;
+                sendBtn.disabled = false;
+                disconnectBtn.disabled = false;
+            } else {
+                statusDiv.textContent = '未接続';
+                statusDiv.className = 'status disconnected';
+                connectBtn.disabled = false;
+                sendBtn.disabled = true;
+                disconnectBtn.disabled = true;
+            }
+        }
+
+        connectBtn.addEventListener('click', async () => {
+            try {
+                // デバイスを検索して接続
+                device = await navigator.bluetooth.requestDevice({
+                    filters: [{ services: [SERVICE_UUID] }],
+                    optionalServices: [SERVICE_UUID]
+                });
+
+                device.addEventListener('gattserverdisconnected', () => {
+                    updateUI(false);
+                    characteristic = null;
+                    showMessage('デバイスが切断されました', 'error');
+                });
+
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                characteristic = await service.getCharacteristic(RX_CHAR_UUID);
+
+                updateUI(true);
+                showMessage('接続しました', 'success');
+            } catch (error) {
+                console.error('接続エラー:', error);
+                showMessage('接続に失敗しました: ' + error.message, 'error');
+            }
+        });
+
+        sendBtn.addEventListener('click', async () => {
+            if (!characteristic) {
+                showMessage('デバイスに接続されていません', 'error');
+                return;
+            }
+
+            try {
+                // 現在時刻を取得
+                const now = new Date();
+                const hh = String(now.getHours()).padStart(2, '0');
+                const mm = String(now.getMinutes()).padStart(2, '0');
+                const ss = String(now.getSeconds()).padStart(2, '0');
+                
+                // オフセットを取得
+                const offset = parseInt(offsetInput.value) || 0;
+                
+                // フォーマット: HH:MM:SS,OFFSET_MIN
+                const message = `${hh}:${mm}:${ss},${offset}`;
+                
+                // 送信
+                const encoder = new TextEncoder();
+                await characteristic.writeValue(encoder.encode(message));
+                
+                showMessage(`送信しました: ${message}`, 'success');
+            } catch (error) {
+                console.error('送信エラー:', error);
+                showMessage('送信に失敗しました: ' + error.message, 'error');
+            }
+        });
+
+        disconnectBtn.addEventListener('click', () => {
+            if (device && device.gatt.connected) {
+                device.gatt.disconnect();
+                updateUI(false);
+                characteristic = null;
+                showMessage('切断しました', 'success');
+            }
+        });
+
+        // Web Bluetooth API対応チェック
+        if (!navigator.bluetooth) {
+            showMessage('このブラウザはWeb Bluetooth APIに対応していません。Bluefyを使用してください。', 'error');
+            connectBtn.disabled = true;
+        }
+    </script>
+</body>
+</html>
