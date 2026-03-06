@@ -1,42 +1,43 @@
+#include <Arduino.h>
 #include <BLEDevice.h>
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
 
-// ===== ESP32-S3 Super Mini オンボードLED =====
+// ===== ESP32-S3 Super Mini オンボ�EドLED =====
 constexpr uint8_t LED_PIN = 47;
 
-// ===== 1つ目のステッピングモータ (GPIO7-4) =====
+// ===== 1つ目のスチE��ピングモータ (GPIO7-4) =====
 constexpr uint8_t MOTOR1_PIN1 = 7;
 constexpr uint8_t MOTOR1_PIN2 = 6;
 constexpr uint8_t MOTOR1_PIN3 = 5;
 constexpr uint8_t MOTOR1_PIN4 = 4;
 
-// ===== 2つ目のステッピングモータ (GPIO8-11) =====
+// ===== 2つ目のスチE��ピングモータ (GPIO8-11) =====
 constexpr uint8_t MOTOR2_PIN1 = 8;
 constexpr uint8_t MOTOR2_PIN2 = 9;
 constexpr uint8_t MOTOR2_PIN3 = 10;
 constexpr uint8_t MOTOR2_PIN4 = 11;
 
-// ステッピングモータのステップパターン（1相励磁、低消費電力）
+// スチE��ピングモータのスチE��プパターン�E�E相励磁、低消費電力！E
 const uint8_t STEP_PATTERN[4][4] = {
     {1, 0, 0, 0},
     {0, 1, 0, 0},
     {0, 0, 1, 0},
     {0, 0, 0, 1}};
 
-// モータ状態
+// モータ状慁E
 int motor1Position = 0;
 int motor2Position = 0;
 bool motorSequenceRunning = false;
 int offsetMinutes = 0;
-int targetMinutes = 0;        // 目標位置（分単位）
-int currentTargetMinutes = 0; // 現在の目標位置（初期位置からの相対値）
+int targetMinutes = 0;        // 目標位置�E��E単位！E
+int currentTargetMinutes = 0; // 現在の目標位置�E��E期位置からの相対値�E�E
 
 // シリアル受信でのモータ2直接制御用
 int serialMotor2Steps = 0;
-int serialMotor2Direction = 0; // 1: 正転, -1: 逆転
+int serialMotor2Direction = 0; // 1: 正転, -1: 送E��
 
-// シーケンス状態
+// シーケンス状慁E
 enum MotorSequence
 {
   SEQ_IDLE,
@@ -48,7 +49,7 @@ enum MotorSequence
 MotorSequence currentSequence = SEQ_IDLE;
 int sequenceStep = 0;
 uint32_t lastStepTime = 0;
-constexpr uint16_t STEP_DELAY_MS = 2; // ステップ間隔（ms）
+constexpr uint16_t STEP_DELAY_MS = 2; // スチE��プ間隔！Es�E�E
 
 // ===== internal clock base (0:00 start) =====
 volatile uint32_t base_sec = 0;
@@ -64,19 +65,19 @@ volatile bool bleTaskRunning = false;
 // BLE非同期スキャンタスク用
 TaskHandle_t bleTaskHandle = nullptr;
 
-// ★前回受け取った時刻（秒単位）とオフセットを記録して重複更新を防ぐ
-static uint32_t lastReceivedTimeSeconds = 0xFFFFFFFF; // 初期値：無効
-static int8_t lastReceivedOffset = 0x7F;              // 初期値：無効
+// ☁E��回受け取った時刻�E�秒単位）とオフセチE��を記録して重褁E��新を防ぁE
+static uint32_t lastReceivedTimeSeconds = 0xFFFFFFFF; // 初期値�E�無効
+static int8_t lastReceivedOffset = 0x7F;              // 初期値�E�無効
 
 volatile bool newDataReceived = false;
 
-// ブロードキャストパケット処理（Manufacturer Data形式）
-// 2パターン対応:
+// ブロードキャストパケチE��処琁E��Eanufacturer Data形式！E
+// 2パターン対忁E
 // パターン1: [0-1]:0x55 0xAA [2]:0x01 [3-5]:HH MM SS [6]:offset [7]:reserved (8bytes total)
 // パターン2: [0]:0x01 [1-3]:HH MM SS [4]:offset [5]:reserved (6bytes total)
 bool applyBroadcastPacket(const uint8_t *data, size_t len)
 {
-  // Raw data を16進数で表示
+  // Raw data めE6進数で表示
   Serial.print("[BLE RX] Raw data (");
   Serial.print(len);
   Serial.print(" bytes): ");
@@ -93,10 +94,10 @@ bool applyBroadcastPacket(const uint8_t *data, size_t len)
   int hh, mm, ss;
   int8_t offset;
 
-  // パターン判定
+  // パターン判宁E
   if (len >= 8 && data[0] == 0x55 && data[1] == 0xAA)
   {
-    // パターン1：Manufacturer ID込み
+    // パターン1�E�Manufacturer ID込み
 
     if (data[2] != 0x01)
     {
@@ -110,7 +111,7 @@ bool applyBroadcastPacket(const uint8_t *data, size_t len)
   }
   else if (len >= 6 && data[0] == 0x01)
   {
-    // パターン2：Version が [0]
+    // パターン2�E�Version ぁE[0]
 
     hh = data[1];
     mm = data[2];
@@ -122,7 +123,7 @@ bool applyBroadcastPacket(const uint8_t *data, size_t len)
     return false;
   }
 
-  // ペイロード表示（デバッグ）
+  // ペイロード表示�E�デバッグ�E�E
 
   Serial.print("[DEBUG] Parsed: ");
   if (hh < 10)
@@ -142,13 +143,13 @@ bool applyBroadcastPacket(const uint8_t *data, size_t len)
   Serial.println(offset);
   Serial.flush();
 
-  // 検証: 時刻が有効範囲か
+  // 検証: 時刻が有効篁E��ぁE
   if (hh < 0 || hh > 23 || mm < 0 || mm > 59 || ss < 0 || ss > 59)
   {
     return false;
   }
 
-  // ★重要: 同じ時刻とオフセットを受け取った場合はスキップ（重複更新を防止）
+  // ☁E��要E 同じ時刻とオフセチE��を受け取った場合�EスキチE�E�E�重褁E��新を防止�E�E
   uint32_t receivedTimeSeconds = hh * 3600 + mm * 60 + ss;
   if (receivedTimeSeconds == lastReceivedTimeSeconds && offset == lastReceivedOffset)
   {
@@ -159,7 +160,7 @@ bool applyBroadcastPacket(const uint8_t *data, size_t len)
   lastReceivedTimeSeconds = receivedTimeSeconds;
   lastReceivedOffset = offset;
 
-  // 時刻適用（オフセット込み）
+  // 時刻適用�E�オフセチE��込み�E�E
   int32_t send_sec = hh * 3600 + mm * 60 + ss;
   int32_t adj = send_sec + (int32_t)offset * 60;
   adj %= 86400;
@@ -170,9 +171,9 @@ bool applyBroadcastPacket(const uint8_t *data, size_t len)
   base_ms = (uint32_t)millis();
   time_valid = true;
 
-  // オフセット（分）を保存してモータシーケンス開始
+  // オフセチE���E��E�E�を保存してモータシーケンス開姁E
   targetMinutes = offset;
-  offsetMinutes = targetMinutes - currentTargetMinutes; // 差分を計算
+  offsetMinutes = targetMinutes - currentTargetMinutes; // 差刁E��計箁E
 
   Serial.print("[MOTOR] Target=");
   Serial.print(targetMinutes);
@@ -206,14 +207,14 @@ void bleScanTask(void *parameter)
       continue;
     }
 
-    // ★モータ動作中はBLEスキャンをスキップ（割り込み防止）
+    // ☁E��ータ動作中はBLEスキャンをスキチE�E�E�割り込み防止�E�E
     if (motorSequenceRunning)
     {
       vTaskDelay(pdMS_TO_TICKS(100));
       continue;
     }
 
-    // スキャン実行
+    // スキャン実衁E
     BLEScanResults foundDevices = pBLEScan->start(2, false); // 2秒スキャン
 
     if (foundDevices.getCount() == 0)
@@ -226,18 +227,18 @@ void bleScanTask(void *parameter)
     int count = foundDevices.getCount();
     deviceCount += count;
 
-    // スキャン結果を処理
+    // スキャン結果を�E琁E
     bool found = false;
     for (int i = 0; i < count; i++)
     {
       BLEAdvertisedDevice device = foundDevices.getDevice(i);
 
-      // ★重要: デバイス名で「TimeFaker_TX」をフィルタリング
+      // ☁E��要E チE��イス名で「TimeFaker_TX」をフィルタリング
       String devName = device.getName().c_str();
 
       if (devName != "TimeFaker_TX")
       {
-        continue; // TimeFaker_TX以外は無視
+        continue; // TimeFaker_TX以外�E無要E
       }
 
       Serial.print("[BLE] Found TimeFaker_TX, RSSI: ");
@@ -248,12 +249,12 @@ void bleScanTask(void *parameter)
       {
         mfgCount++;
 
-        // ★重要: c_str() を使わず、length() を指定して取得（0x00での切り詰め防止）
+        // ☁E��要E c_str() を使わず、length() を指定して取得！Ex00での刁E��詰めE��止�E�E
         std::string mfgString = device.getManufacturerData();
         size_t dataLen = mfgString.length();
         const uint8_t *raw = reinterpret_cast<const uint8_t *>(mfgString.data());
 
-        // Raw dataを16進数で表示（全て）
+        // Raw dataめE6進数で表示�E��Eて�E�E
         Serial.print("[BLE ScanTask] Raw MFG data (");
         Serial.print(dataLen);
         Serial.print(" bytes): ");
@@ -266,9 +267,9 @@ void bleScanTask(void *parameter)
         }
         Serial.println();
 
-        // Manufacturer ID を含む可能性がある: [0-1]=0x55 0xAA
-        // または Version が [0]=0x01 かもしれない
-        // 両パターンチェック
+        // Manufacturer ID を含む可能性があめE [0-1]=0x55 0xAA
+        // また�E Version ぁE[0]=0x01 かもしれなぁE
+        // 両パターンチェチE��
         bool isTimeFaker = false;
 
         if (dataLen >= 8 && raw[0] == 0x55 && raw[1] == 0xAA)
@@ -317,7 +318,7 @@ void bleScanTask(void *parameter)
 
     pBLEScan->clearResults(); // メモリ解放
 
-    vTaskDelay(pdMS_TO_TICKS(500)); // 500ms待機
+    vTaskDelay(pdMS_TO_TICKS(500)); // 500ms征E��E
   }
 
   vTaskDelete(nullptr);
@@ -390,7 +391,7 @@ void startMotor2Serial(int degrees)
     return;
   }
 
-  // 度数をステップ数に変換（2048ステップ/360度）
+  // 度数をスチE��プ数に変換�E�E048スチE��チE360度�E�E
   int steps = abs(degrees) * 2048 / 360;
 
   if (steps == 0)
@@ -428,7 +429,7 @@ void updateMotorSequence()
   switch (currentSequence)
   {
   case SEQ_MOTOR2_FORWARD:
-    // 20度回転（2048ステップ/360度 → 20度 = 114ステップ）
+    // 20度回転�E�E048スチE��チE360度 ↁE20度 = 114スチE��プ！E
     if (sequenceStep < 114)
     {
       motor2Position++;
@@ -446,14 +447,14 @@ void updateMotorSequence()
 
   case SEQ_MOTOR1_ROTATE:
   {
-    // 60分 = 550度、1分 = 9.167度
-    // 2048ステップ/360度 → 1度 = 5.69ステップ
-    // 1分(9.167度) = 52.16ステップ ≈ 52ステップ
+    // 60刁E= 550度、E刁E= 9.167度
+    // 2048スチE��チE360度 ↁE1度 = 5.69スチE��チE
+    // 1刁E9.167度) = 52.16スチE��チE≁E52スチE��チE
     int totalSteps = abs(offsetMinutes) * 52;
 
     if (totalSteps == 0)
     {
-      // オフセット0の場合はスキップ
+      // オフセチE��0の場合�EスキチE�E
       stopMotor1();
       currentSequence = SEQ_MOTOR2_BACKWARD;
       sequenceStep = 0;
@@ -482,7 +483,7 @@ void updateMotorSequence()
   break;
 
   case SEQ_MOTOR2_BACKWARD:
-    // -20度回転（114ステップ戻す）
+    // -20度回転�E�E14スチE��プ戻す！E
     if (sequenceStep < 114)
     {
       motor2Position--;
@@ -491,7 +492,7 @@ void updateMotorSequence()
     }
     else
     {
-      // シーケンス完了
+      // シーケンス完亁E
       stopMotor1();
       stopMotor2();
       motorSequenceRunning = false;
@@ -521,7 +522,7 @@ void updateMotorSequence()
     }
     else
     {
-      // 回転完了
+      // 回転完亁E
       stopMotor2();
       motorSequenceRunning = false;
       currentSequence = SEQ_IDLE;
@@ -541,18 +542,18 @@ void startBLE()
 
   pBLEScan = BLEDevice::getScan();
   pBLEScan->setActiveScan(false); // パッシブスキャン
-  pBLEScan->setInterval(97);      // 約100ms
-  pBLEScan->setWindow(97);        // 約100ms（intervalと同じで連続スキャン）
+  pBLEScan->setInterval(97);      // 紁E00ms
+  pBLEScan->setWindow(97);        // 紁E00ms�E�Entervalと同じで連続スキャン�E�E
   // pBLEScan->setDuplicateFilter(true); // Not available in this BLE library version
 
-  // BLEスキャンを非同期タスクで実行
+  // BLEスキャンを非同期タスクで実衁E
   bleTaskRunning = true;
   xTaskCreatePinnedToCore(
       bleScanTask,
       "BLETask",
-      3072, // スタック量を例外処理用に拡張
+      3072, // スタチE��量を例外�E琁E��に拡張
       nullptr,
-      1, // 優先度（低優先度）
+      1, // 優先度�E�低優先度�E�E
       &bleTaskHandle,
       0 // Core 0
   );
@@ -572,49 +573,49 @@ void setup()
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH); // 起動時点灯
 
-  // シリアル初期化
+  // シリアル初期匁E
   Serial.begin(115200);
 
-  // USB CDCモード対応：デバイスがシリアルポートとして認識されるまで待機
+  // USB CDCモード対応：デバイスがシリアルポ�Eトとして認識されるまで征E��E
   uint32_t startTime = millis();
   while (!Serial && (millis() - startTime) < 10000)
   {
-    digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // LED点滅で待機中を表示
+    digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // LED点滁E��征E��中を表示
     delay(200);
   }
 
-  digitalWrite(LED_PIN, HIGH); // LED点灯に戻す
+  digitalWrite(LED_PIN, HIGH); // LED点灯に戻ぁE
   delay(500);
   Serial.flush();
 
-  // 起動確認
+  // 起動確誁E
   Serial.println("\n\n");
   Serial.println("========================================");
   Serial.println("AnalogClock Started - USB CDC Ready");
   Serial.println("========================================");
   Serial.flush();
 
-  // モータ1初期化
+  // モータ1初期匁E
   pinMode(MOTOR1_PIN1, OUTPUT);
   pinMode(MOTOR1_PIN2, OUTPUT);
   pinMode(MOTOR1_PIN3, OUTPUT);
   pinMode(MOTOR1_PIN4, OUTPUT);
   stopMotor1();
 
-  // モータ2初期化
+  // モータ2初期匁E
   pinMode(MOTOR2_PIN1, OUTPUT);
   pinMode(MOTOR2_PIN2, OUTPUT);
   pinMode(MOTOR2_PIN3, OUTPUT);
   pinMode(MOTOR2_PIN4, OUTPUT);
   stopMotor2();
 
-  // 起動=0:00
+  // 起勁E0:00
   base_sec = 0;
   base_ms = millis();
   time_valid = true;
 
-  // BLE初期化（起動時に実行）
-  delay(500); // 安定待ち
+  // BLE初期化（起動時に実行！E
+  delay(500); // 安定征E��
   Serial.println("[SETUP] Initializing BLE...");
   Serial.flush();
   startBLE();
@@ -628,7 +629,7 @@ void loop()
   static uint32_t lastHeartbeat = 0;
   uint32_t now = millis();
 
-  // ハートビート出力（5秒ごと）
+  // ハ�Eトビート�E力！E秒ごと�E�E
   if (now - lastHeartbeat > 5000)
   {
     lastHeartbeat = now;
@@ -639,7 +640,7 @@ void loop()
     Serial.flush();
   }
 
-  // シリアル受信処理（モータ2直接制御）
+  // シリアル受信処琁E��モータ2直接制御�E�E
   if (Serial.available() > 0)
   {
     String input = Serial.readStringUntil('\n');
@@ -660,7 +661,7 @@ void loop()
     }
   }
 
-  // BLEデータ受信時のモータシーケンス開始
+  // BLEチE�Eタ受信時�Eモータシーケンス開姁E
   if (newDataReceived)
   {
     newDataReceived = false;
