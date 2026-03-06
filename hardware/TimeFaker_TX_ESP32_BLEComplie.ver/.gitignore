@@ -1,0 +1,28 @@
+# PlatformIO
+.pio/
+.platformio/
+build/
+.sconsign.dblite
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Environment
+.env
+.env.local
+
+# OS
+Thumbs.db
+.DS_Store
